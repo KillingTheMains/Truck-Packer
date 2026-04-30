@@ -490,6 +490,89 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .mf-counts-ftype-lbl{color:#aaa;flex:1;white-space:nowrap;}
 .mf-counts-ftype-num{font-weight:bold;color:#ffd580;font-size:15px;white-space:nowrap;}
 
+/* ────────────────────────────────────────────────────────────
+   MOBILE RESPONSIVE  (≤ 680 px)
+   ────────────────────────────────────────────────────────── */
+@media (max-width:680px){
+  /* Main topbar: scrollable so all buttons reachable */
+  .topbar{height:auto;min-height:44px;overflow-x:auto;flex-wrap:nowrap;scrollbar-width:none;padding:0 8px;gap:6px;}
+  .topbar::-webkit-scrollbar{display:none;}
+  .topbar h1{font-size:14px;}
+  .topbar-logo{height:26px;}
+  .show-name-input{min-width:80px;max-width:110px;font-size:11px;}
+  .btn{padding:5px 8px;font-size:11px;}
+  .mode-pill{font-size:11px;padding:4px 8px;}
+
+  /* Truck list sub-topbar: horizontally scrollable chip strip */
+  .tl-topbar{flex-wrap:nowrap;overflow-x:auto;padding:8px 10px;gap:8px;scrollbar-width:none;}
+  .tl-topbar::-webkit-scrollbar{display:none;}
+  .mf-chip{flex-shrink:0;padding:6px 12px;font-size:12px;min-height:34px;}
+  .mf-title{flex-shrink:0;}
+  .tl-progress-select{flex-shrink:0;}
+  .tl-progress-wrap{min-width:50px;flex-shrink:0;}
+  .tl-progress-label{flex-shrink:0;}
+
+  /* Info / status bar */
+  .tl-info-bar{padding:5px 10px;gap:6px;flex-wrap:wrap;}
+  .tl-sync{display:none;}
+
+  /* ── Table → Cards ─────────────────────────────────────── */
+  .tl-table{display:block;}
+  .tl-table thead{display:none;}
+  .tl-table tbody{display:flex;flex-direction:column;gap:8px;padding:8px;}
+
+  .tl-table tbody tr{
+    display:block;
+    border-radius:12px;
+    padding:12px 14px;
+    border:1px solid #2a3a5a;
+  }
+
+  /* Every cell: flex row with label + value */
+  .tl-table td{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:3px 0;
+    font-size:13px;
+    white-space:normal;
+    border:none;
+  }
+
+  /* data-label shown as small uppercase prefix */
+  .tl-table td[data-label]::before{
+    content:attr(data-label);
+    font-size:9px;
+    font-weight:bold;
+    color:#5a7a9a;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+    white-space:nowrap;
+    min-width:44px;
+    flex-shrink:0;
+  }
+
+  /* Truck ID: large, no label prefix */
+  .tl-table td.tl-td-id{font-size:18px;font-weight:bold;color:#90cfff;padding-bottom:4px;}
+  .tl-table td.tl-td-id::before{display:none;}
+
+  /* Status badge */
+  .tl-status-badge{font-size:13px;padding:5px 16px;}
+
+  /* Action cell: full-width, big tap targets, separated */
+  .tl-table td.tl-td-action{border-top:1px solid #1a2a44;margin-top:8px;padding-top:10px;}
+  .tl-table td.tl-td-action::before{display:none;}
+  .tl-table td.tl-td-action>div{width:100%;gap:8px;}
+  .tl-confirm-btn{flex:1;padding:13px 10px;font-size:15px;text-align:center;border-radius:9px;}
+  .tl-jump-btn{padding:13px 18px;font-size:18px;border-radius:9px;}
+
+  /* Notes input */
+  .tl-notes-input{font-size:14px;padding:4px 6px;min-width:0;}
+
+  /* Duration */
+  .tl-duration{font-size:12px;}
+}
+
 </style>
 </head>
 <body>
@@ -4284,21 +4367,21 @@ function App() {
                       return (
                         <tr key={ri} style={sCfg?{background:sCfg.rowBg}:{}}>
                           {row.map((cell,ci)=>(
-                            <td key={ci} className={ci===1?'tl-td-id':''}>
+                            <td key={ci} className={ci===1?'tl-td-id':''} data-label={truckListHeaders[ci]||''}>
                               {cell||<span className="tl-td-ph">—</span>}
                             </td>
                           ))}
-                          <td>
+                          <td data-label="Status">
                             <span className="tl-status-badge" style={sCfg
                               ?{background:sCfg.bg,color:sCfg.color,border:`1px solid ${sCfg.border}`}
                               :{background:'rgba(90,110,140,.12)',color:'#546E7A',border:'1px solid rgba(90,110,140,.25)'}}>
                               {sCfg?sCfg.label:'○ Pending'}
                             </span>
                           </td>
-                          <td className="tl-td-ts" title={status&&truckLoaded[tid]?.statusAt?fmtLoadTs(truckLoaded[tid].statusAt):''}>
+                          <td className="tl-td-ts" data-label="Since" title={status&&truckLoaded[tid]?.statusAt?fmtLoadTs(truckLoaded[tid].statusAt):''}>
                             <span className="tl-duration">{status&&truckLoaded[tid]?.statusAt?fmtDuration(truckLoaded[tid].statusAt):'—'}</span>
                           </td>
-                          <td>
+                          <td data-label="Notes">
                             <input
                               className="tl-notes-input"
                               type="text"
@@ -4308,7 +4391,7 @@ function App() {
                               onChange={e=>{const v=e.target.value;setTruckNotes(prev=>{const n={...prev};if(v)n[tid]=v;else delete n[tid];return n;});}}
                             />
                           </td>
-                          <td>
+                          <td className="tl-td-action">
                             <div style={{display:'flex',gap:5,alignItems:'center'}}>
                               <button
                                 className="tl-confirm-btn"
