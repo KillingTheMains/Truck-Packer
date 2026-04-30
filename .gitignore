@@ -1,0 +1,21 @@
+# Excel / data files
+*.xlsx
+*.xls
+*.csv
+
+# PDF exports
+*.pdf
+
+# Backup files
+Backups/
+*BACKUP*.html
+
+# Python scripts (job-specific tooling)
+*.py
+
+# macOS junk
+.DS_Store
+Thumbs.db
+
+# Don't track the old filename once renamed
+Trailer Packer.html
