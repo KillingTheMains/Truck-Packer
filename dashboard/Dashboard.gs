@@ -56,33 +56,21 @@ function getDashData() {
 }
 
 function doGet(e) {
-  var data = readTruckData();
-  var g = { loaded:[], unloaded:[], backloaded:[], empty:[], staged:[], pending:[] };
-  data.forEach(function(r) {
-    var id = String(r[0]).toUpperCase();
-    var st = String(r[2] || 'pending').toLowerCase();
-    if (!g[st]) st = 'pending';
-    g[st].push({ id: id, ts: Number(r[3] || 0) });
-  });
-  g.loaded.sort(function(a, b) { return b.ts - a.ts; });
-  var sd = JSON.stringify({
-    loaded:     g.loaded.map(function(t)     { return t.id; }),
-    unloaded:   g.unloaded.map(function(t)   { return t.id; }),
-    backloaded: g.backloaded.map(function(t) { return t.id; }),
-    empty:      g.empty.map(function(t)      { return t.id; }),
-    staged:     g.staged.map(function(t)     { return t.id; }),
-    pending:    g.pending.map(function(t)    { return t.id; }),
-    total:    data.length,
-    at:       Date.now(),
-    activity: getRecentActivity_()
-  });
-  return HtmlService.createHtmlOutput(buildDashHtml_(sd))
+  // JSON data endpoint — fetch() polling replaces google.script.run
+  if (e && e.parameter && e.parameter.action === 'data') {
+    return ContentService
+      .createTextOutput(getDashData())
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  var sd        = getDashData();
+  var scriptUrl = ScriptApp.getService().getUrl();
+  return HtmlService.createHtmlOutput(buildDashHtml_(sd, scriptUrl))
     .setTitle('SAP Sapphire — Truck Status')
     .setSandboxMode(HtmlService.SandboxMode.IFRAME)
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
-function buildDashHtml_(sd) {
+function buildDashHtml_(sd, scriptUrl) {
   var REFRESH_MS = 480000;
   var parsed   = JSON.parse(sd);
   var total    = parsed.total;
@@ -311,6 +299,7 @@ function buildDashHtml_(sd) {
     'var TOTAL=' + total + ';',
     'var CLRS={loaded:"#00e676",unloaded:"#ffd740",backloaded:"#ff9100",empty:"#ff4560",staged:"#448aff",pending:"#546e7a"};',
     'var ACTIVITY=' + actJson + ';',
+    'var SCRIPT_URL="' + scriptUrl + '";',
     'var showIds=false,kiosk=false,t0=Date.now(),currentHero="loaded";',
     'window.setHero=function(st){',
       'var d=DATA[st],c=CLRS[st];',
@@ -387,7 +376,7 @@ function buildDashHtml_(sd) {
       'if(left<=30000)cdEl.style.color="#ff4560";',
       'else if(left<=120000)cdEl.style.color="#ffd740";',
       'else cdEl.style.color="var(--accent)";',
-      'if(left<=0){t0=Date.now();google.script.run.withSuccessHandler(doRefresh).withFailureHandler(function(){}).getDashData();}',
+      'if(left<=0){t0=Date.now();fetch(SCRIPT_URL+"?action=data").then(function(r){return r.text();}).then(doRefresh).catch(function(){});}',
     '}',
     'function savePrefs(){try{localStorage.setItem("sap26_prefs",JSON.stringify({hero:currentHero,kiosk:kiosk,showIds:showIds}));}catch(e){}}',
     'function loadPrefs(){try{return JSON.parse(localStorage.getItem("sap26_prefs")||"{}");}catch(e){return {};}}',
@@ -395,11 +384,11 @@ function buildDashHtml_(sd) {
       'var ORDER=["loaded","unloaded","backloaded","empty","staged","pending"];' +
       'var el=document.querySelector(".ticker-list");' +
       'if(!el)return;' +
-      'if(!ACTIVITY.length){el.innerHTML='<div class="tick-dim">No recent activity</div>';return;}' +
+      `if(!ACTIVITY.length){el.innerHTML='<div class="tick-dim">No recent activity</div>';return;}` +
       'el.innerHTML=ACTIVITY.slice(0,6).map(function(a){' +
         'var st=(a.status||"pending").toLowerCase();' +
         'var cls=ORDER.indexOf(st)>=0?st:"pending";' +
-        'return '<div class="tick-item"><span class="tick-dot '+cls+'-bg"></span><span class="tick-truck">'+a.truck+'</span><span class="tick-arrow">→</span><span class="tick-status '+cls+'-clr">'+st.toUpperCase()+'</span><span class="tick-ago" data-ts="'+a.ts+'"></span></div>';' +
+        `return '<div class="tick-item"><span class="tick-dot '+cls+'-bg"></span><span class="tick-truck">'+a.truck+'</span><span class="tick-arrow">→</span><span class="tick-status '+cls+'-clr">'+st.toUpperCase()+'</span><span class="tick-ago" data-ts="'+a.ts+'"></span></div>';` +
       '}).join("");' +
       'updateAgoTimes();' +
     '}',
@@ -409,7 +398,7 @@ function buildDashHtml_(sd) {
       'if(!el||!ACTIVITY.length)return;' +
       'var la=ACTIVITY[0];' +
       'var cls=ORDER.indexOf((la.status||"").toLowerCase())>=0?la.status.toLowerCase():"pending";' +
-      'el.innerHTML='LAST <span style="color:#fff">'+la.truck+'</span> → <span class="'+cls+'-clr">'+la.status.toUpperCase()+'</span> <span class="tick-ago" data-ts="'+la.ts+'"></span>';' +
+      `el.innerHTML='LAST <span style="color:#fff">'+la.truck+'</span> → <span class="'+cls+'-clr">'+la.status.toUpperCase()+'</span> <span class="tick-ago" data-ts="'+la.ts+'"></span>';` +
       'updateAgoTimes();' +
     '}',
     'function doRefresh(sd){' +
@@ -427,9 +416,9 @@ function buildDashHtml_(sd) {
           'var pctEl=document.getElementById("cpct-"+k);if(pctEl)pctEl.textContent=p+"%";' +
           'var listEl=document.getElementById("list-"+k);' +
           'if(listEl)listEl.innerHTML=ids.map(function(id){' +
-            'return '<span class="chip" data-id="'+id+'" data-st="'+k+'" onclick="openManifest(this.dataset.id,this.dataset.st)">'+id+'</span>';' +
+            `return '<span class="chip" data-id="'+id+'" data-st="'+k+'" onclick="openManifest(this.dataset.id,this.dataset.st)">'+id+'</span>';` +
           '}).join("");' +
-          'document.querySelectorAll('.hsel-btn[data-st="'+k+'"]').forEach(function(b){b.textContent=(DATA[k]?DATA[k].lbl:k.toUpperCase())+" "+cnt;});' +
+          `document.querySelectorAll('.hsel-btn[data-st="'+k+'"]').forEach(function(b){b.textContent=(DATA[k]?DATA[k].lbl:k.toUpperCase())+" "+cnt;});` +
         '});' +
         'ACTIVITY=parsed.activity||[];' +
         't0=Date.now();' +
