@@ -455,6 +455,7 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-td-id{font-weight:bold;color:#90cfff;letter-spacing:.04em;}
 .tl-td-ts{font-family:monospace;font-size:11px;color:#5a8a5a;white-space:nowrap;}
 .tl-duration{font-size:11px;color:#90a4ae;white-space:nowrap;}
+.tl-ts-time{display:block;font-size:10px;color:#4a6a8a;font-family:monospace;white-space:nowrap;margin-top:1px;}
 .tl-notes-input{background:transparent;border:none;border-bottom:1px solid #1e3050;color:#90a4ae;font-size:11px;width:100%;min-width:80px;padding:1px 2px;outline:none;font-family:inherit;}
 .tl-notes-input:focus{border-bottom-color:#448aff;color:#cdd9e8;background:rgba(68,138,255,.06);}
 .tl-notes-input::placeholder{color:#2a4a5a;}
@@ -4442,6 +4443,7 @@ function App() {
                           </td>
                           <td className="tl-td-ts" data-label="Since" title={status&&truckLoaded[tid]?.statusAt?fmtLoadTs(truckLoaded[tid].statusAt):''}>
                             <span className="tl-duration">{status&&truckLoaded[tid]?.statusAt?fmtDuration(truckLoaded[tid].statusAt):'—'}</span>
+                            {status&&truckLoaded[tid]?.statusAt&&<span className="tl-ts-time">{fmtLoadTs(truckLoaded[tid].statusAt)}</span>}
                           </td>
                           <td data-label="Notes">
                             <input
