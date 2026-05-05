@@ -2,7 +2,7 @@
   "name": "Truck Packer",
   "short_name": "Truck Packer",
   "description": "Trailer loading and manifest management for live events",
-  "start_url": "/",
+  "start_url": "/Truck-Packer/",
   "display": "standalone",
   "background_color": "#1a1a2e",
   "theme_color": "#e91e8c",
