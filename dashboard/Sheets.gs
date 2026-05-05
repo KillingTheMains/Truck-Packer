@@ -146,6 +146,12 @@ function savePackerData_(trucks, truckLoaded) {
 // - Write pre-computed Manifest rows to sheet ------------------------
 function writePackerManifest_(rows) {
   Logger.log('WPM called, rows=' + (rows ? rows.length : 'NULL'));
+  // Safety guard: never wipe the Manifest when called with empty rows.
+  // This protects against the page-close sendBeacon sending manifest:[] and clearing real data.
+  if (!rows || rows.length === 0) {
+    Logger.log('WPM skipped — empty rows, refusing to clear existing manifest data.');
+    return 0;
+  }
   var ss = SpreadsheetApp.openById(SHEET_ID)
   var sheet = ss.getSheetByName('Manifest');
   if (!sheet) { throw new Error('NO_SHEET:'+ss.getSheets().map(function(s){return s.getName();}).join(',')); }
@@ -153,10 +159,8 @@ function writePackerManifest_(rows) {
   if (last >= 2) {
     sheet.getRange(2, 1, last - 1, sheet.getMaxColumns()).clearContent();
   }
-  if (rows.length > 0) {
-    sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-    SpreadsheetApp.flush();
-  }
+  sheet.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
+  SpreadsheetApp.flush();
   try { writeManifestSummary_(sheet, rows); } catch(se) { Logger.log('Summary err: ' + se); }
   return rows.length;
 }

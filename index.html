@@ -1849,17 +1849,20 @@ function App() {
       const _tfs={}; Object.keys(trucks).forEach(tid=>{const t=trucks[tid];_tfs[tid]={...t,history:[],scans:(t.scans||[]).slice(-50)};});
       try { lsSet('truckPacker_trucks', JSON.stringify(_tfs)); } catch(e) {}
       try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
+      try { lsSet('truckPacker_notes', JSON.stringify(truckNotes)); } catch(e) {}
       // Best-effort async send to CLAUDIA via sendBeacon (fire-and-forget, no response needed)
+      // NOTE: manifest is intentionally omitted here — sendBeacon with manifest:[] would clear the
+      // Manifest sheet. The 4s debounced save handles Sheets sync; beacon only updates status.
       if (CLAUDIA_ENDPOINT && Object.values(trucks).some(t=>Object.keys(t.placed||{}).length>0)) {
         try {
           navigator.sendBeacon(CLAUDIA_ENDPOINT,
-            JSON.stringify({source:'TrailerPackerData', action:'save', trucks, truckLoaded, manifest:[]}));
+            JSON.stringify({source:'TrailerPackerData', action:'save', trucks, truckLoaded}));
         } catch(e) {}
       }
     };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
-  }, [trucks, truckLoaded]);
+  }, [trucks, truckLoaded, truckNotes]);
 
   useEffect(() => {
     if (selPId === null || !placedListRef.current) return;

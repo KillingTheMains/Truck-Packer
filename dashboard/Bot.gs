@@ -25,22 +25,22 @@ function doPost(e) {
       }
     }
 
+    // Activity Log from Trailer Packer
+    if (payload.source === 'TrailerPackerLog') {
+      try {
+        if (payload.entry) writeLogEntry_(payload.entry);
+        return ContentService.createTextOutput(JSON.stringify({ok:true}))
+          .setMimeType(ContentService.MimeType.JSON);
+      } catch(e) {
+        return ContentService.createTextOutput(JSON.stringify({ok:false,err:e.message}))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+    }
+
     // Google Workspace Add-On format
     if (payload.chat) {
       if (payload.chat.addedToSpacePayload) return respond(getGreeting());
       if (payload.chat.removedFromSpacePayload) {
-// - Activity Log from Trailer Packer --------------------
-if (payload.source === 'TrailerPackerLog') {
-  try {
-    if (payload.entry) writeLogEntry_(payload.entry);
-    return ContentService.createTextOutput(JSON.stringify({ok:true}))
-      .setMimeType(ContentService.MimeType.JSON);
-  } catch(e) {
-    return ContentService.createTextOutput(JSON.stringify({ok:false,err:e.message}))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
         return ContentService.createTextOutput('{}').setMimeType(ContentService.MimeType.JSON);
       }
       if (payload.chat.messagePayload) {
