@@ -472,7 +472,7 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-progress-select:hover{border-color:#4a6a8a;color:#fff;}
 .tl-info-bar{background:#0a1220;border-bottom:1px solid #1a2a44;padding:6px 18px;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;}
 .tl-info-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:bold;white-space:nowrap;}
-.tl-sync{font-size:10px;color:#445;margin-left:auto;}
+.tl-sync{font-size:10px;color:#445;}
 .tl-empty{padding:48px;text-align:center;color:#334;font-size:13px;line-height:1.8;}
 .tl-ph-hdr{color:#334;font-style:italic;font-weight:normal;text-transform:none;letter-spacing:0;}
 
@@ -4354,6 +4354,125 @@ function App() {
       const progressCount=tlProgressStatus==='pending'?pendingCount:(statusCounts[tlProgressStatus]||0);
       const progressPct=totalCount>0?Math.round(progressCount/totalCount*100):0;
       const progressColor=TRUCK_STATUS_CONFIG[tlProgressStatus]?.color||'#90A4AE';
+
+      const exportTruckListPDF = () => {
+        const { jsPDF } = window.jspdf;
+        const PW=792, PH=612, ML=24, MR=24;
+        const doc = new jsPDF({ orientation:'landscape', unit:'pt', format:'letter' });
+
+        // ── Header bar ──────────────────────────────────────────────────
+        const hdrH=48;
+        doc.setFillColor(15,27,51);
+        doc.rect(0,0,PW,hdrH,'F');
+        doc.setFillColor(233,30,140);
+        doc.rect(0,hdrH,PW,3,'F');
+
+        const titleStr = showName ? `TRUCK LIST — ${showName.toUpperCase()}` : 'TRUCK LIST';
+        doc.setFont('helvetica','bold'); doc.setFontSize(16); doc.setTextColor(255,255,255);
+        doc.text(titleStr, ML, 30);
+
+        const activeLabels = [...tlFilter].map(s=>s==='pending'?'Pending':(TRUCK_STATUS_CONFIG[s]?.label?.replace(/^[^ ]+ /,'')||s));
+        doc.setFont('helvetica','normal'); doc.setFontSize(8); doc.setTextColor(144,164,174);
+        doc.text(`Filter: ${activeLabels.join(', ')}  ·  ${filteredRows.length} truck${filteredRows.length!==1?'s':''}`, ML, 42);
+
+        const now=new Date();
+        const tsStr=`Exported ${now.toLocaleDateString()} ${now.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`;
+        doc.text(tsStr, PW-MR, 42, {align:'right'});
+
+        // ── Column definitions ───────────────────────────────────────────
+        const usableW = PW-ML-MR;
+        const STATUS_RGB = {staged:[68,138,255],loaded:[67,160,71],unloaded:[218,165,0],backloaded:[255,152,0],empty:[229,57,53]};
+
+        const sheetW  = truckListHeaders.length>0 ? Math.min(Math.floor(usableW*0.52), truckListHeaders.length*120) : 0;
+        const perSCol = truckListHeaders.length>0 ? Math.floor(sheetW/truckListHeaders.length) : 0;
+        const fixedR  = usableW - sheetW;
+        const statusW = Math.floor(fixedR*0.24);
+        const sinceW  = Math.floor(fixedR*0.22);
+        const notesW  = fixedR - statusW - sinceW;
+
+        const cols = [
+          ...truckListHeaders.map((h,i)=>({
+            label:h||`Col ${i+1}`, w:perSCol,
+            get:row=>String(row[i]||''),
+            color:null,
+          })),
+          { label:'Status', w:statusW,
+            get:row=>{ const s=getTruckStatus(truckLoaded[row[1]||'']); return s?(TRUCK_STATUS_CONFIG[s]?.label?.replace(/^[^ ]+ /,'')||s):'Pending'; },
+            getStatus:row=>getTruckStatus(truckLoaded[row[1]||'']),
+            color:'status' },
+          { label:'Since', w:sinceW,
+            get:row=>{ const li=truckLoaded[row[1]||'']; return li?.statusAt?fmtLoadTs(li.statusAt):'—'; },
+            color:null },
+          { label:'Notes', w:notesW,
+            get:row=>truckNotes[row[1]||'']||'',
+            color:null },
+        ];
+
+        // ── Table ────────────────────────────────────────────────────────
+        const rowH=21, tblTop=hdrH+3+10;
+        let y=tblTop;
+        let pageNum=1;
+
+        const drawHeaderRow=()=>{
+          doc.setFillColor(22,42,80);
+          doc.rect(ML,y,usableW,rowH,'F');
+          doc.setFont('helvetica','bold'); doc.setFontSize(7.5); doc.setTextColor(120,140,170);
+          let x=ML;
+          cols.forEach(c=>{ doc.text(c.label.toUpperCase(), x+5, y+13); x+=c.w; });
+          y+=rowH;
+        };
+
+        drawHeaderRow();
+
+        doc.setFont('helvetica','normal'); doc.setFontSize(9);
+        filteredRows.forEach((row,ri)=>{
+          if(y+rowH > PH-24){
+            // Footer on this page
+            doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(70,85,110);
+            doc.text('TRUCK PACKER — killingthemains.github.io/Truck-Packer', ML, PH-10);
+            doc.text(`Page ${pageNum}`, PW-MR, PH-10, {align:'right'});
+            doc.addPage(); pageNum++;
+            y=28;
+            drawHeaderRow();
+            doc.setFont('helvetica','normal'); doc.setFontSize(9);
+          }
+          // Row bg
+          doc.setFillColor(ri%2===0?10:17, ri%2===0?18:28, ri%2===0?38:58);
+          doc.rect(ML,y,usableW,rowH,'F');
+          // Row bottom divider
+          doc.setDrawColor(26,42,72); doc.setLineWidth(0.4);
+          doc.line(ML,y+rowH,ML+usableW,y+rowH);
+
+          let x=ML;
+          cols.forEach(c=>{
+            const val=c.get(row);
+            if(c.color==='status'){
+              const s=c.getStatus(row);
+              const rgb=s?STATUS_RGB[s]:null;
+              doc.setTextColor(rgb?rgb[0]:100, rgb?rgb[1]:110, rgb?rgb[2]:130);
+            } else {
+              doc.setTextColor(190,205,220);
+            }
+            const maxW=c.w-10;
+            const lines=doc.splitTextToSize(val,maxW);
+            const txt=lines.length>1?lines[0].replace(/.$/,'…'):lines[0]||'';
+            doc.text(txt, x+5, y+14);
+            x+=c.w;
+          });
+          y+=rowH;
+        });
+
+        // Footer on last page
+        doc.setFont('helvetica','normal'); doc.setFontSize(7); doc.setTextColor(70,85,110);
+        doc.text('TRUCK PACKER — killingthemains.github.io/Truck-Packer', ML, PH-10);
+        doc.text(`Page ${pageNum}`, PW-MR, PH-10, {align:'right'});
+
+        // ── Save ─────────────────────────────────────────────────────────
+        const filterTag=[...tlFilter].length===6?'all':[...tlFilter].join('-');
+        const dateTag=now.toISOString().slice(0,10);
+        doc.save(`truck-list-${filterTag}-${dateTag}.pdf`);
+      };
+
       return (
         <div className="tl-page">
           <div className="tl-topbar">
@@ -4382,7 +4501,12 @@ function App() {
                 title={v==='pending'?'Pending (no status set)':TRUCK_STATUS_CONFIG[v]?.label}
               >{l}</button>
             ))}
-            <span className="tl-sync">
+            <button className="btn btn-pdf" style={{fontSize:10,padding:'3px 10px',marginLeft:'auto'}}
+              onClick={exportTruckListPDF}
+              title={`Export ${filteredRows.length} truck${filteredRows.length!==1?'s':''} to PDF (current filter)`}
+              disabled={filteredRows.length===0}
+            >⬇ PDF</button>
+            <span className="tl-sync" style={{marginLeft:0}}>
               {truckListStatus==='loading'?'⟳ syncing…':truckListStatus==='error'?'⚠ sync error':''}
             </span>
           </div>
