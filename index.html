@@ -4424,11 +4424,10 @@ function App() {
         cols[cols.length-1].w += usableW - assigned;
 
         // ── Table ────────────────────────────────────────────────────────
-        const rowH=21, tblTop=hdrH+3+10;
+        const rowH=28; // tall enough for 2 wrapped lines
+        const tblTop=hdrH+3+10;
         let y=tblTop;
         let pageNum=1;
-
-        const rowH=28; // tall enough for 2 wrapped lines
         const drawHeaderRow=()=>{
           doc.setFillColor(240,243,248);
           doc.rect(ML,y,usableW,rowH-4,'F');
