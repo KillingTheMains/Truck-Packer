@@ -343,7 +343,7 @@ function setupHourlyTrigger() {
     if (t.getHandlerFunction() === 'sendHourlyStatus') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('sendHourlyStatus').timeBased().everyHours(1).create();
-  Logger.log('Hourly trigger installed. CLAUDIA will post between 7am-7pm.');
+  Logger.log('Hourly trigger installed. JULIE will post between 7am-7pm.');
 }
 
 function removeHourlyTrigger() {

@@ -682,7 +682,7 @@ const vendorFromName = name => { for(const v of VENDORS) if(name.startsWith(v+' 
 const stripVendorPrefix = name => { for(const v of VENDORS) if(name.startsWith(v+' ')) return name.slice(v.length+1); return name; };
 const isUtilityItem = item => (item?.cat||'').toLowerCase() === 'general';
 
-const CLAUDIA_ENDPOINT = 'https://script.google.com/macros/s/AKfycbz-K_UtMZpW5jVh4Ztdx71ul0a5T8ko62KSV6EEsW1avidYRdGaDFOzFLts4JXFBaBXDQ/exec';
+const JULIE_ENDPOINT = 'https://script.google.com/macros/s/AKfycbz-K_UtMZpW5jVh4Ztdx71ul0a5T8ko62KSV6EEsW1avidYRdGaDFOzFLts4JXFBaBXDQ/exec';
 
 const CHAT_MSG_TEMPLATES = [
   {key:'staged',     icon:'🔵', label:'Is Staged',        text: id=>`${id} IS STAGED`,          color:'#448aff', bg:'rgba(68,138,255,.12)', border:'rgba(68,138,255,.4)'},
@@ -1620,8 +1620,8 @@ function App() {
 
   // ── Load data from Apps Script sheet via endpoint on startup ─────────────
   useEffect(() => {
-    if (!CLAUDIA_ENDPOINT) { setAppLoaded(true); return; }
-    fetch(CLAUDIA_ENDPOINT, {
+    if (!JULIE_ENDPOINT) { setAppLoaded(true); return; }
+    fetch(JULIE_ENDPOINT, {
       method: 'POST',
       headers: {'Content-Type': 'text/plain'},
       body: JSON.stringify({ source: 'TrailerPackerData', action: 'load' })
@@ -1777,7 +1777,7 @@ function App() {
       try { lsSet('truckPacker_trucks', JSON.stringify(_trucksForStorage)); } catch(e) {
         console.warn('[TP] localStorage save failed even after stripping — check storage quota'); }
       try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
-      if (!CLAUDIA_ENDPOINT) { setSaveStatus('saved'); return; }
+      if (!JULIE_ENDPOINT) { setSaveStatus('saved'); return; }
       // SAFETY GUARD: only save to Sheets if at least one truck has placed items.
       // Saving with empty trucks calls updatePackerManifest_() which clears the Manifest tab.
       const anyPlaced = Object.values(trucks).some(t => Object.keys(t.placed||{}).length > 0);
@@ -1811,7 +1811,7 @@ function App() {
         });
       });
       console.log('[TP Save] manifest rows:', manifestRows.length, '| trucks:', Object.keys(trucks).length, '| placed trucks:', Object.values(trucks).filter(t=>Object.keys(t.placed||{}).length>0).map(t=>t.info?.id||'?').join(','));
-      fetch(CLAUDIA_ENDPOINT, {
+      fetch(JULIE_ENDPOINT, {
         method: 'POST',
         headers: {'Content-Type': 'text/plain'},
         body: JSON.stringify({ source: 'TrailerPackerData', action: 'save', trucks, truckLoaded, manifest: manifestRows })
@@ -1850,12 +1850,12 @@ function App() {
       try { lsSet('truckPacker_trucks', JSON.stringify(_tfs)); } catch(e) {}
       try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
       try { lsSet('truckPacker_notes', JSON.stringify(truckNotes)); } catch(e) {}
-      // Best-effort async send to CLAUDIA via sendBeacon (fire-and-forget, no response needed)
+      // Best-effort async send to JULIE via sendBeacon (fire-and-forget, no response needed)
       // NOTE: manifest is intentionally omitted here — sendBeacon with manifest:[] would clear the
       // Manifest sheet. The 4s debounced save handles Sheets sync; beacon only updates status.
-      if (CLAUDIA_ENDPOINT && Object.values(trucks).some(t=>Object.keys(t.placed||{}).length>0)) {
+      if (JULIE_ENDPOINT && Object.values(trucks).some(t=>Object.keys(t.placed||{}).length>0)) {
         try {
-          navigator.sendBeacon(CLAUDIA_ENDPOINT,
+          navigator.sendBeacon(JULIE_ENDPOINT,
             JSON.stringify({source:'TrailerPackerData', action:'save', trucks, truckLoaded}));
         } catch(e) {}
       }
@@ -2486,8 +2486,8 @@ function App() {
       // Activity log is session-only — not persisted to localStorage (too large)
       return next;
     });
-    if(CLAUDIA_ENDPOINT){
-      fetch(CLAUDIA_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
+    if(JULIE_ENDPOINT){
+      fetch(JULIE_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({source:'TrailerPackerLog',entry})}).catch(()=>{});
     }
   }, []);
@@ -2804,7 +2804,7 @@ function App() {
     return rows;
   }, [trucks]);
 
-  // (CLAUDIA sync removed — data is now live in Google Sheets via saveAppData)
+  // (JULIE sync removed — data is now live in Google Sheets via saveAppData)
 
   const filteredManifest = React.useMemo(() => {
     let rows = globalManifest;

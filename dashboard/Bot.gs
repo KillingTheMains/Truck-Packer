@@ -67,7 +67,7 @@ function doPost(e) {
 }
 
 function getGreeting() {
-  return 'Hi! I\'m CLAUDIA, your SAP26 truck status bot. Ask me:\n- "status" -- overall summary with timestamps\n- "loaded" / "pending" -- list by status\n- "recent" or "recent 20" -- last N status changes\n- "FAV24" -- status of a specific truck\n- "what\'s in FAV24" -- full manifest for a truck\n- "where is SEE11" -- find item by label\n- "where is case #40" -- find item by Case ID\n- "mark FAV24 loaded" / "mark FAV24 staged" / "mark FAV24 pending"';
+  return 'Hi! I\'m JULIE, your SAP26 truck status bot. Ask me:\n- "status" -- overall summary with timestamps\n- "loaded" / "pending" -- list by status\n- "recent" or "recent 20" -- last N status changes\n- "FAV24" -- status of a specific truck\n- "what\'s in FAV24" -- full manifest for a truck\n- "where is SEE11" -- find item by label\n- "where is case #40" -- find item by Case ID\n- "mark FAV24 loaded" / "mark FAV24 staged" / "mark FAV24 pending"';
 }
 
 function respond(text) {
@@ -191,7 +191,7 @@ function markTruckStatus(truckId, newStatus) {
 }
 
 function getHelp() {
-  return 'CLAUDIA COMMANDS:\n- "status" -- summary + loaded list with timestamps\n- "loaded" / "pending" -- full list by status\n- "recent" or "recent 20" -- last N status changes\n- "FAV24" -- specific truck status + timestamp\n- "what\'s in FAV24" -- truck manifest\n- "where is SEE11" -- find by label\n- "where is case #40" -- find by Case ID\n- "mark FAV24 loaded/staged/pending/etc"\n- "f-type" -- F-Type stick counts';
+  return 'JULIE COMMANDS:\n- "status" -- summary + loaded list with timestamps\n- "loaded" / "pending" -- full list by status\n- "recent" or "recent 20" -- last N status changes\n- "FAV24" -- specific truck status + timestamp\n- "what\'s in FAV24" -- truck manifest\n- "where is SEE11" -- find by label\n- "where is case #40" -- find by Case ID\n- "mark FAV24 loaded/staged/pending/etc"\n- "f-type" -- F-Type stick counts';
 }
 
 function formatTimestamp(ts) {
