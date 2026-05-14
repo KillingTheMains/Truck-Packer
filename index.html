@@ -2828,6 +2828,17 @@ function App() {
     });
   };
 
+  // saveDock — manual edit from Truck List; writes dock only, does NOT change status
+  const saveDock = (tid, dockStr) => {
+    const dock = dockStr.trim().toUpperCase();
+    if (!dock) { clearDock(tid); return; }
+    setTruckDock(prev => ({ ...prev, [tid]: dock }));
+    db.collection('status').doc(tid).set(
+      { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    ).catch(e => console.warn('[FS] dock save failed:', tid, e.message));
+  };
+
   const clearDock = (tid) => {
     setTruckDock(prev => { const n = { ...prev }; delete n[tid]; return n; });
     db.collection('status').doc(tid).set(
@@ -4828,12 +4839,28 @@ function App() {
                             );
                           })}
                           <td data-label="Dock" style={{whiteSpace:'nowrap'}}>
-                            {truckDock[tid]
-                              ? <span className="tl-dock-badge">
-                                  {truckDock[tid]}
-                                  <button className="tl-dock-clear" onClick={()=>clearDock(tid)} title="Clear dock assignment">×</button>
-                                </span>
-                              : <span className="tl-td-ph">—</span>
+                            {tlEditing?.tid===tid && tlEditing?.col==='dock'
+                              ? <input
+                                  autoFocus
+                                  className="tl-meta-input"
+                                  style={{width:70,textTransform:'uppercase'}}
+                                  defaultValue={truckDock[tid]||''}
+                                  placeholder="D1"
+                                  onBlur={e=>{
+                                    saveDock(tid, e.target.value);
+                                    setTlEditing(null);
+                                  }}
+                                  onKeyDown={e=>{
+                                    if(e.key==='Enter') e.target.blur();
+                                    if(e.key==='Escape') setTlEditing(null);
+                                  }}
+                                />
+                              : truckDock[tid]
+                                ? <span className="tl-dock-badge" style={{cursor:'text'}} onClick={()=>setTlEditing({tid,col:'dock'})} title="Click to edit dock">
+                                    {truckDock[tid]}
+                                    <button className="tl-dock-clear" onClick={e=>{e.stopPropagation();clearDock(tid);}} title="Clear dock assignment">×</button>
+                                  </span>
+                                : <span className="tl-td-ph tl-meta-editable" onClick={()=>setTlEditing({tid,col:'dock'})} title="Click to assign dock">—</span>
                             }
                           </td>
                           <td data-label="Status">
