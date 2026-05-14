@@ -1444,6 +1444,28 @@ function buildPDF(truckData, library, mode='save', showName='', paper='letter', 
   }
 }
 
+// ── Case registry: extract all barcoded items from truck layouts ───────────────
+function extractCasesFromTrucks(trucks) {
+  const out = {};
+  Object.entries(trucks).forEach(([truckId, t]) => {
+    Object.values(t.placed || {}).forEach(p => {
+      const lc = p.tripleStack ? 3 : p.doubleStack ? 2 : 1;
+      for (let li = 0; li < lc; li++) {
+        const bc = (p.layerBarcodes?.[li] ?? (li === 0 ? (p.barcode || '') : '')).trim();
+        if (!bc) continue;
+        out[bc] = {
+          caseId: bc,
+          item: p.item?.name || '',
+          label: (p.layerLabels?.[li] ?? (li === 0 ? (p.label || '') : '')).trim(),
+          color: (p.layerHex?.[li] ?? (li === 0 ? (p.customHex || 'glass') : 'glass')),
+          currentTruck: truckId,
+        };
+      }
+    });
+  });
+  return out;
+}
+
 // ── All-Trucks PDF Export (legal landscape, one page per packed truck) ─────────
 function buildAllPDF(trucks, library, showName='', stackHighlight=true) {
   const { jsPDF } = window.jspdf;
@@ -1577,6 +1599,12 @@ function App() {
   const [historyFilter,     setHistoryFilter]     = useState('ALL');
   const [historyTruckFilter, setHistoryTruckFilter] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
+  const [caseModalOpen,     setCaseModalOpen]     = useState(false);
+  const [caseLookupId,      setCaseLookupId]      = useState('');
+  const [caseLookupData,    setCaseLookupData]    = useState(null);
+  const [caseLookupLoading, setCaseLookupLoading] = useState(false);
+  const [caseReassignTruck, setCaseReassignTruck] = useState('');
+  const caseAssignmentsRef = useRef({});
   const [pickupStatusModal, setPickupStatusModal] = useState(null); // {pickupSet, dock} — pending dispatch awaiting status choice
   // ── Truck List state ──────────────────────────────────────────────────────
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
@@ -1701,11 +1729,12 @@ function App() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [layoutsSnap, metaSnap, statusSnap, logsSnap] = await Promise.all([
+        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap] = await Promise.all([
           db.collection('layouts').get(),
           db.collection('meta').get(),
           db.collection('status').get(),
           db.collection('logs').orderBy('ts','desc').limit(500).get(),
+          db.collection('cases').get(),
         ]);
 
         // ── Truck layouts ────────────────────────────────────────────────
@@ -1830,10 +1859,17 @@ function App() {
         if (!logsSnap.empty) {
           const entries = [];
           logsSnap.forEach(doc => entries.push(doc.data()));
-          // Sort client-side (already ordered desc by ts, just make sure)
           entries.sort((a,b) => (b.ts||0)-(a.ts||0));
           setActivityLog(entries);
           console.log('[FS] loaded', entries.length, 'activity log entries');
+        }
+
+        // ── Case registry ─────────────────────────────────────────────────
+        if (!casesSnap.empty) {
+          const ca = {};
+          casesSnap.forEach(doc => { ca[doc.id] = doc.data(); });
+          caseAssignmentsRef.current = ca;
+          console.log('[FS] loaded', Object.keys(ca).length, 'case records');
         }
 
       } catch(e) {
@@ -1944,6 +1980,43 @@ function App() {
         });
         await batch.commit();
         setSaveStatus('saved');
+
+        // ── Sync case registry from current layouts ──────────────────────
+        const nowMs = Date.now();
+        const extracted = extractCasesFromTrucks(trucks);
+        const existing  = caseAssignmentsRef.current;
+        const caseUpdates = [];
+        Object.entries(extracted).forEach(([caseId, info]) => {
+          const prev = existing[caseId];
+          const isNew = !prev;
+          const truckChanged = prev && prev.currentTruck !== info.currentTruck;
+          if (!isNew && !truckChanged && prev.item === info.item && prev.label === info.label) return;
+          const docData = {
+            caseId, item: info.item, label: info.label, color: info.color,
+            currentTruck: info.currentTruck,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          };
+          if (isNew) {
+            docData.firstSeen = nowMs;
+            docData.truckHistory = [{ truckId: info.currentTruck, assignedAt: nowMs, source: 'pack' }];
+          } else if (truckChanged) {
+            docData.truckHistory = [
+              ...(prev.truckHistory || []),
+              { truckId: info.currentTruck, assignedAt: nowMs, source: 'pack' }
+            ];
+          }
+          caseUpdates.push({ caseId, docData });
+          caseAssignmentsRef.current[caseId] = { ...(existing[caseId] || {}), ...docData };
+        });
+        if (caseUpdates.length > 0) {
+          for (let i = 0; i < caseUpdates.length; i += 499) {
+            const cb = db.batch();
+            caseUpdates.slice(i, i + 499).forEach(({ caseId, docData }) =>
+              cb.set(db.collection('cases').doc(caseId), docData, { merge: true })
+            );
+            cb.commit().catch(e => console.warn('[FS] cases sync failed:', e.message));
+          }
+        }
       } catch(e) {
         console.warn('[FS] layout save failed:', e.message);
         setSaveStatus('error');
@@ -2984,6 +3057,42 @@ function App() {
     packed.forEach(([id]) => batch.delete(db.collection('layouts').doc(id)));
     batch.commit().catch(e => console.warn('[FS] clearAll layouts failed:', e.message));
     addHistoryEntry('STATUS', null, null, `ALL TRUCK LAYOUTS CLEARED (${packed.length} truck${packed.length!==1?'s':''})`);
+  };
+
+  const lookupCase = async (id) => {
+    const caseId = (id || caseLookupId).trim();
+    if (!caseId) return;
+    setCaseLookupLoading(true);
+    setCaseLookupData(null);
+    setCaseReassignTruck('');
+    try {
+      const doc = await db.collection('cases').doc(caseId).get();
+      if (!doc.exists) {
+        setCaseLookupData({ notFound: true, caseId });
+      } else {
+        const data = doc.data();
+        const truckIds = [...new Set([data.currentTruck, ...(data.truckHistory||[]).map(h=>h.truckId)].filter(Boolean))];
+        const logEntries = activityLog.filter(e => truckIds.includes(e.truckId)).sort((a,b) => a.ts - b.ts);
+        setCaseLookupData({ ...data, logEntries });
+      }
+    } catch(e) { setCaseLookupData({ error: e.message }); }
+    setCaseLookupLoading(false);
+  };
+
+  const reassignCase = async (caseId, newTruckId) => {
+    if (!caseId || !newTruckId.trim()) return;
+    const truck = newTruckId.trim().toUpperCase();
+    const nowMs = Date.now();
+    const prev  = caseAssignmentsRef.current[caseId] || {};
+    const newHistory = [...(prev.truckHistory || []), { truckId: truck, assignedAt: nowMs, source: 'manual' }];
+    await db.collection('cases').doc(caseId).set({
+      currentTruck: truck, truckHistory: newHistory,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(e => console.warn('[FS] reassign failed:', e.message));
+    caseAssignmentsRef.current[caseId] = { ...prev, currentTruck: truck, truckHistory: newHistory };
+    addHistoryEntry('STATUS', truck, null, `Case ${caseId} manually reassigned → ${truck}`);
+    await lookupCase(caseId);
+    setCaseReassignTruck('');
   };
 
   const handleLoad = () => { setLoadJson(''); setLoadMsg(''); setModal('load'); };
@@ -4866,6 +4975,10 @@ function App() {
               onClick={()=>{ setTlAddId(''); setTlAddOpen(true); }}
               title="Add a new trailer to the truck list"
             >+ Add Trailer</button>
+            <button className="btn" style={{fontSize:10,padding:'3px 10px',background:'rgba(0,150,136,.18)',border:'1px solid rgba(0,150,136,.4)',color:'#80cbc4'}}
+              onClick={()=>{ setCaseLookupData(null); setCaseLookupId(''); setCaseModalOpen(true); }}
+              title="Look up a case number to see which trailer it's on and its full history"
+            >🔍 Case Lookup</button>
             <button className="btn" style={{fontSize:10,padding:'3px 10px',background:'rgba(183,28,28,.18)',border:'1px solid rgba(229,57,53,.4)',color:'#ef9a9a'}}
               onClick={clearAllLayouts}
               title="Clear all truck pack layouts (3 confirmations required)"
@@ -5043,6 +5156,103 @@ function App() {
                   <button className="tl-add-cancel" onClick={()=>setTlAddOpen(false)}>Cancel</button>
                   <button className="tl-add-confirm" onClick={()=>addTrailer(tlAddId)} disabled={!tlAddId.trim()}>Add Trailer</button>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── CASE LOOKUP MODAL ── */}
+          {caseModalOpen && (
+            <div className="tl-add-modal" onClick={()=>setCaseModalOpen(false)}>
+              <div className="tl-add-box" style={{minWidth:420,maxWidth:560,maxHeight:'80vh',overflowY:'auto'}} onClick={e=>e.stopPropagation()}>
+                <h3 style={{marginBottom:12,letterSpacing:'.06em'}}>🔍 CASE LOOKUP</h3>
+                {/* Search bar */}
+                <div style={{display:'flex',gap:8,marginBottom:16}}>
+                  <input
+                    autoFocus
+                    className="tl-add-input"
+                    style={{flex:1,textTransform:'uppercase'}}
+                    placeholder="Enter case / barcode number…"
+                    value={caseLookupId}
+                    onChange={e=>setCaseLookupId(e.target.value.toUpperCase())}
+                    onKeyDown={e=>{ if(e.key==='Enter') lookupCase(); }}
+                  />
+                  <button className="tl-add-confirm" onClick={()=>lookupCase()} disabled={!caseLookupId.trim()}>
+                    {caseLookupLoading ? '…' : 'Look Up'}
+                  </button>
+                </div>
+
+                {/* Results */}
+                {caseLookupData && (() => {
+                  if (caseLookupData.notFound) return (
+                    <div style={{fontFamily:'monospace',fontSize:11,color:'#ef9a9a',padding:'12px 0'}}>
+                      No record found for case <strong>{caseLookupData.caseId}</strong>.<br/>
+                      <span style={{color:'#607d8b',fontSize:10}}>Cases are registered when trailers are packed and saved.</span>
+                    </div>
+                  );
+                  if (caseLookupData.error) return (
+                    <div style={{fontFamily:'monospace',fontSize:11,color:'#ef9a9a'}}>Error: {caseLookupData.error}</div>
+                  );
+                  const { caseId, item, label, currentTruck, truckHistory=[], firstSeen, logEntries=[] } = caseLookupData;
+                  const fmtTs = ts => { if(!ts) return '—'; const d=new Date(ts); return d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); };
+                  // Build merged timeline: truck assignments + status log entries
+                  const timeline = [];
+                  truckHistory.forEach(h => timeline.push({ ts: h.assignedAt, type:'assign', truckId:h.truckId, source:h.source }));
+                  logEntries.forEach(e => timeline.push({ ts:e.ts, type:'log', truckId:e.truckId, status:e.status, details:e.details, logType:e.type }));
+                  timeline.sort((a,b) => a.ts - b.ts);
+                  return (
+                    <div>
+                      {/* Case header */}
+                      <div style={{background:'rgba(255,255,255,.05)',border:'1px solid rgba(255,255,255,.1)',borderRadius:6,padding:'10px 14px',marginBottom:12}}>
+                        <div style={{fontFamily:'monospace',fontSize:13,fontWeight:'bold',color:'#90cfff',marginBottom:4}}>{caseId}</div>
+                        <div style={{fontSize:11,color:'#b0c4d8'}}>{item}{label ? <span style={{color:'#90cfff'}}> — {label}</span> : ''}</div>
+                        <div style={{marginTop:8,display:'flex',alignItems:'center',gap:8}}>
+                          <span style={{fontSize:10,color:'#607d8b',fontFamily:'monospace'}}>CURRENT TRUCK:</span>
+                          <span style={{fontSize:13,fontWeight:'bold',color: currentTruck ? '#43A047' : '#546E7A',fontFamily:'monospace'}}>
+                            {currentTruck || '— unassigned'}
+                          </span>
+                        </div>
+                        {firstSeen && <div style={{fontSize:9,color:'#455a64',marginTop:4,fontFamily:'monospace'}}>First seen: {fmtTs(firstSeen)}</div>}
+                      </div>
+
+                      {/* Timeline */}
+                      <div style={{fontSize:10,color:'#546e7a',fontFamily:'monospace',letterSpacing:'.06em',marginBottom:6}}>HISTORY</div>
+                      <div style={{display:'flex',flexDirection:'column',gap:3,marginBottom:16,maxHeight:220,overflowY:'auto'}}>
+                        {timeline.length === 0 && <div style={{fontSize:11,color:'#455a64',fontFamily:'monospace'}}>No history yet.</div>}
+                        {timeline.map((ev, i) => (
+                          <div key={i} style={{display:'flex',gap:8,alignItems:'flex-start',fontFamily:'monospace',fontSize:10,padding:'3px 6px',borderRadius:3,background:'rgba(255,255,255,.03)'}}>
+                            <span style={{color:'#455a64',flexShrink:0,width:110}}>{fmtTs(ev.ts)}</span>
+                            {ev.type === 'assign'
+                              ? <span style={{color:'#CE93D8'}}>📦 Assigned to <strong style={{color:'#fff'}}>{ev.truckId}</strong>{ev.source==='manual'?' (manual)':ev.source==='pack'?' (pack)':''}</span>
+                              : <span style={{color: ev.status ? (TRUCK_STATUS_CONFIG[ev.status]?.color||'#90a4ae') : '#607d8b'}}>
+                                  [{ev.logType}] {ev.truckId} {ev.details ? '— '+ev.details : ''}
+                                </span>
+                            }
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Manual reassignment */}
+                      <div style={{borderTop:'1px solid rgba(255,255,255,.08)',paddingTop:12}}>
+                        <div style={{fontSize:10,color:'#546e7a',fontFamily:'monospace',letterSpacing:'.06em',marginBottom:6}}>REASSIGN TO TRUCK</div>
+                        <div style={{display:'flex',gap:8}}>
+                          <input
+                            className="tl-add-input"
+                            style={{flex:1,textTransform:'uppercase'}}
+                            placeholder="Truck ID (e.g. FAV24)…"
+                            value={caseReassignTruck}
+                            onChange={e=>setCaseReassignTruck(e.target.value.toUpperCase())}
+                            onKeyDown={e=>{ if(e.key==='Enter') reassignCase(caseId, caseReassignTruck); }}
+                          />
+                          <button className="tl-add-confirm"
+                            disabled={!caseReassignTruck.trim() || caseReassignTruck.trim().toUpperCase()===currentTruck}
+                            onClick={()=>reassignCase(caseId, caseReassignTruck)}>
+                            Move
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             </div>
           )}
