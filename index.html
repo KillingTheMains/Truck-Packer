@@ -2826,29 +2826,31 @@ function App() {
 
   // Record dock assignment for pickup trucks when a dispatch is sent/copied
   const recordDocks = (pickupSet, dockStr) => {
-    if (!dockStr.trim() || pickupSet.size === 0) return;
+    if (pickupSet.size === 0) return;
     const dock = dockStr.trim().toUpperCase();
-    // Enforce uniqueness — warn if dock is already occupied by a different truck
-    const conflict = Object.entries(truckDock).find(([t, d]) => d === dock && !pickupSet.has(t));
-    if (conflict) {
-      const ok = window.confirm(`Dock ${dock} is currently assigned to ${conflict[0]}.\nReassign it to the incoming truck?`);
-      if (!ok) return;
-      clearDock(conflict[0]);
+    if (dock) {
+      // Enforce uniqueness — warn if dock is already occupied by a different truck
+      const conflict = Object.entries(truckDock).find(([t, d]) => d === dock && !pickupSet.has(t));
+      if (conflict) {
+        const ok = window.confirm(`Dock ${dock} is currently assigned to ${conflict[0]}.\nReassign it to the incoming truck?`);
+        if (!ok) return;
+        clearDock(conflict[0]);
+      }
+      // Apply dock assignment immediately
+      setTruckDock(prev => {
+        const next = { ...prev };
+        pickupSet.forEach(tid => { next[tid] = dock; });
+        return next;
+      });
+      pickupSet.forEach(tid => {
+        db.collection('status').doc(tid).set(
+          { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
+      });
     }
-    // Apply dock assignment immediately, then ask what status to set
-    setTruckDock(prev => {
-      const next = { ...prev };
-      pickupSet.forEach(tid => { next[tid] = dock; });
-      return next;
-    });
-    pickupSet.forEach(tid => {
-      db.collection('status').doc(tid).set(
-        { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
-        { merge: true }
-      ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
-    });
-    // Open status picker modal
-    setPickupStatusModal({ pickupSet, dock });
+    // Always open status picker modal regardless of whether a dock was entered
+    setPickupStatusModal({ pickupSet, dock: dock || null });
   };
 
   // Apply the chosen status after the dispatch status picker
@@ -2869,7 +2871,8 @@ function App() {
         { status: chosenStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       ).catch(e => console.warn('[FS] status write failed:', tid, e.message));
-      addHistoryEntry('DOCK', tid, chosenStatus, `${tid} → DOCK ${dock} → ${chosenStatus.toUpperCase()} (dispatched)`);
+      const dockPart = dock ? ` → DOCK ${dock}` : '';
+      addHistoryEntry('STATUS', tid, chosenStatus, `${tid}${dockPart} → ${chosenStatus.toUpperCase()} (dispatched)`);
     });
   };
 
@@ -5005,7 +5008,7 @@ function App() {
               <div className="tl-add-box" style={{minWidth:320,maxWidth:400}}>
                 <h3 style={{marginBottom:6}}>SET STATUS AFTER DISPATCH</h3>
                 <div style={{fontSize:11,fontFamily:'monospace',color:'#90b0c0',marginBottom:16,letterSpacing:'.04em'}}>
-                  {[...pickupStatusModal.pickupSet].join(', ')} → DOCK {pickupStatusModal.dock}
+                  {[...pickupStatusModal.pickupSet].join(', ')}{pickupStatusModal.dock ? ` → DOCK ${pickupStatusModal.dock}` : ''}
                 </div>
                 <div style={{display:'flex',flexDirection:'column',gap:8}}>
                   {TRUCK_STATUS_CYCLE.map(s => {
