@@ -1559,6 +1559,7 @@ function App() {
   const [historyFilter,     setHistoryFilter]     = useState('ALL');
   const [historyTruckFilter, setHistoryTruckFilter] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
+  const [pickupStatusModal, setPickupStatusModal] = useState(null); // {pickupSet, dock} — pending dispatch awaiting status choice
   // ── Truck List state ──────────────────────────────────────────────────────
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
   const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
@@ -2832,28 +2833,43 @@ function App() {
     if (conflict) {
       const ok = window.confirm(`Dock ${dock} is currently assigned to ${conflict[0]}.\nReassign it to the incoming truck?`);
       if (!ok) return;
-      // Clear old truck's dock assignment
       clearDock(conflict[0]);
     }
+    // Apply dock assignment immediately, then ask what status to set
     setTruckDock(prev => {
       const next = { ...prev };
       pickupSet.forEach(tid => { next[tid] = dock; });
       return next;
     });
-    // Auto-set status to "At Dock" for all dispatched trucks
+    pickupSet.forEach(tid => {
+      db.collection('status').doc(tid).set(
+        { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
+    });
+    // Open status picker modal
+    setPickupStatusModal({ pickupSet, dock });
+  };
+
+  // Apply the chosen status after the dispatch status picker
+  const applyPickupStatus = (chosenStatus) => {
+    if (!pickupStatusModal) return;
+    const { pickupSet, dock } = pickupStatusModal;
+    setPickupStatusModal(null);
+    const now = Date.now();
     setTruckLoaded(prev => {
       const next = { ...prev };
       pickupSet.forEach(tid => {
-        next[tid] = { status: 'atdock', loadedAt: Date.now(), statusAt: Date.now() };
+        next[tid] = { status: chosenStatus, loadedAt: now, statusAt: now };
       });
       return next;
     });
     pickupSet.forEach(tid => {
       db.collection('status').doc(tid).set(
-        { dock, status: 'atdock', updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+        { status: chosenStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
         { merge: true }
-      ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
-      addHistoryEntry('DOCK', tid, 'atdock', `${tid} → DOCK ${dock} (dispatched)`);
+      ).catch(e => console.warn('[FS] status write failed:', tid, e.message));
+      addHistoryEntry('DOCK', tid, chosenStatus, `${tid} → DOCK ${dock} → ${chosenStatus.toUpperCase()} (dispatched)`);
     });
   };
 
@@ -4978,6 +4994,34 @@ function App() {
                 <div className="tl-add-btns">
                   <button className="tl-add-cancel" onClick={()=>setTlAddOpen(false)}>Cancel</button>
                   <button className="tl-add-confirm" onClick={()=>addTrailer(tlAddId)} disabled={!tlAddId.trim()}>Add Trailer</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── PICKUP STATUS PICKER ── */}
+          {pickupStatusModal && (
+            <div className="tl-add-modal">
+              <div className="tl-add-box" style={{minWidth:320,maxWidth:400}}>
+                <h3 style={{marginBottom:6}}>SET STATUS AFTER DISPATCH</h3>
+                <div style={{fontSize:11,fontFamily:'monospace',color:'#90b0c0',marginBottom:16,letterSpacing:'.04em'}}>
+                  {[...pickupStatusModal.pickupSet].join(', ')} → DOCK {pickupStatusModal.dock}
+                </div>
+                <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                  {TRUCK_STATUS_CYCLE.map(s => {
+                    const cfg = TRUCK_STATUS_CONFIG[s];
+                    return (
+                      <button key={s} onClick={()=>applyPickupStatus(s)}
+                        style={{padding:'10px 16px',fontSize:12,fontWeight:'bold',fontFamily:'monospace',
+                          letterSpacing:'.06em',cursor:'pointer',borderRadius:4,textAlign:'left',
+                          background:cfg.bg, border:`1px solid ${cfg.border}`, color:cfg.color}}>
+                        {cfg.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{marginTop:14,textAlign:'right'}}>
+                  <button className="tl-add-cancel" onClick={()=>setPickupStatusModal(null)}>Skip</button>
                 </div>
               </div>
             </div>
