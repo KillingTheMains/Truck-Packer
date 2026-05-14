@@ -2807,6 +2807,14 @@ function App() {
   const recordDocks = (pickupSet, dockStr) => {
     if (!dockStr.trim() || pickupSet.size === 0) return;
     const dock = dockStr.trim().toUpperCase();
+    // Enforce uniqueness — warn if dock is already occupied by a different truck
+    const conflict = Object.entries(truckDock).find(([t, d]) => d === dock && !pickupSet.has(t));
+    if (conflict) {
+      const ok = window.confirm(`Dock ${dock} is currently assigned to ${conflict[0]}.\nReassign it to the incoming truck?`);
+      if (!ok) return;
+      // Clear old truck's dock assignment
+      clearDock(conflict[0]);
+    }
     setTruckDock(prev => {
       const next = { ...prev };
       pickupSet.forEach(tid => { next[tid] = dock; });
@@ -2832,6 +2840,12 @@ function App() {
   const saveDock = (tid, dockStr) => {
     const dock = dockStr.trim().toUpperCase();
     if (!dock) { clearDock(tid); return; }
+    // Enforce uniqueness — only one truck per dock at a time
+    const conflict = Object.entries(truckDock).find(([t, d]) => d === dock && t !== tid);
+    if (conflict) {
+      alert(`Dock ${dock} is already assigned to ${conflict[0]}.\nClear it from ${conflict[0]} first, or choose a different dock.`);
+      return;
+    }
     setTruckDock(prev => ({ ...prev, [tid]: dock }));
     db.collection('status').doc(tid).set(
       { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
@@ -4892,10 +4906,13 @@ function App() {
                                 style={sCfg?{background:sCfg.bg,color:sCfg.color,borderColor:sCfg.border}:{}}
                                 onChange={e=>{
                                   const next=e.target.value||null;
+                                  const prevStatus=getTruckStatus(truckLoaded[tid]);
                                   setTruckLoaded(prev=>{
                                     if(!next){const n={...prev};delete n[tid];return n;}
                                     return {...prev,[tid]:{status:next,loadedAt:Date.now(),statusAt:Date.now()}};
                                   });
+                                  // Leaving At Dock → clear dock assignment automatically
+                                  if(prevStatus==='atdock' && next!=='atdock') clearDock(tid);
                                   addHistoryEntry('STATUS',tid,next,`${tid} → ${(next||'PENDING').toUpperCase()}`);
                                 }}
                               >
