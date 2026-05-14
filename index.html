@@ -9,6 +9,26 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.11.0/firebase-firestore-compat.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyAuit0NvIMCIjrShnUQq4JpeMi6oaEqD3c",
+  authDomain: "ktm-logistics-b2309.firebaseapp.com",
+  projectId: "ktm-logistics-b2309",
+  storageBucket: "ktm-logistics-b2309.firebasestorage.app",
+  messagingSenderId: "511695572351",
+  appId: "1:511695572351:web:c285f8a4d71a41c704de4a"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+// Enable offline persistence (IndexedDB) so the app works without network
+db.enablePersistence().catch(err => {
+  if (err.code === 'failed-precondition') console.warn('[FS] Multiple tabs open — persistence only active in one tab');
+  else if (err.code === 'unimplemented') console.warn('[FS] Browser does not support offline persistence');
+});
+</script>
 <link rel="manifest" href="manifest.json">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -460,6 +480,9 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-notes-input:focus{border-bottom-color:#448aff;color:#cdd9e8;background:rgba(68,138,255,.06);}
 .tl-notes-input::placeholder{color:#2a4a5a;}
 .tl-td-ph{color:#2a3a4a;}
+.tl-meta-editable{cursor:text;display:block;min-width:32px;border-bottom:1px dashed rgba(144,164,174,.25);padding:1px 2px;border-radius:2px;}
+.tl-meta-editable:hover{border-bottom-color:#90A4AE;background:rgba(144,164,174,.07);}
+.tl-meta-input{background:rgba(10,24,56,.9);border:1px solid #448aff;color:#fff;font-size:11px;padding:2px 5px;border-radius:3px;width:100%;min-width:60px;outline:none;font-family:inherit;}
 .tl-status-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:bold;white-space:nowrap;}
 .tl-confirm-btn{padding:4px 11px;border-radius:5px;font-size:11px;font-weight:bold;cursor:pointer;border:1px solid #2a4a6a;background:#0d2040;color:#90A4AE;white-space:nowrap;transition:all .15s;}
 .tl-confirm-btn:hover{filter:brightness(1.2);}
@@ -682,7 +705,7 @@ const vendorFromName = name => { for(const v of VENDORS) if(name.startsWith(v+' 
 const stripVendorPrefix = name => { for(const v of VENDORS) if(name.startsWith(v+' ')) return name.slice(v.length+1); return name; };
 const isUtilityItem = item => (item?.cat||'').toLowerCase() === 'general';
 
-const JULIE_ENDPOINT = 'https://script.google.com/macros/s/AKfycbz-K_UtMZpW5jVh4Ztdx71ul0a5T8ko62KSV6EEsW1avidYRdGaDFOzFLts4JXFBaBXDQ/exec';
+const JULIE_ENDPOINT = ''; // Data now lives in Firestore — JULIE bot will be rebuilt separately
 
 const CHAT_MSG_TEMPLATES = [
   {key:'staged',     icon:'🔵', label:'Is Staged',        text: id=>`${id} IS STAGED`,          color:'#448aff', bg:'rgba(68,138,255,.12)', border:'rgba(68,138,255,.4)'},
@@ -1513,9 +1536,16 @@ function App() {
   const [activityLog,   setActivityLog]   = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_history')||'[]');}catch(e){return[];} });
   const [historyFilter, setHistoryFilter] = useState('ALL');
   // ── Truck List state ──────────────────────────────────────────────────────
-  const [truckListRows,    setTruckListRows]    = useState([]);
-  const [truckListHeaders, setTruckListHeaders] = useState([]);
+  const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
+  const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
+  const truckListRows = React.useMemo(() =>
+    TRUCK_IDS.map((id, idx) => {
+      const m = truckMeta[id] || {};
+      return [String(m.num ?? idx + 1), id, m.trailerNum || '', m.doorType || '', m.length || '', m.contents || ''];
+    })
+  , [truckMeta]);
   const [truckListStatus,  setTruckListStatus]  = useState('idle');
+  const [tlEditing,        setTlEditing]        = useState(null); // {tid,col} for inline cell edit
   const [truckLoaded,      setTruckLoaded]      = useState({});
   const [truckNotes,       setTruckNotes]       = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_notes')||'{}');}catch{return{};} });
   const [tlSort,   setTlSort]   = useState({col:-1, dir:'asc'});
@@ -1618,59 +1648,135 @@ function App() {
       .catch(e => console.warn('Auto-backup failed:', e.message));
   }, [truckLoaded, appLoaded]);
 
-  // ── Load data from Apps Script sheet via endpoint on startup ─────────────
+  // ── Load data from Firestore on startup ─────────────────────────────────
   useEffect(() => {
-    if (!JULIE_ENDPOINT) { setAppLoaded(true); return; }
-    fetch(JULIE_ENDPOINT, {
-      method: 'POST',
-      headers: {'Content-Type': 'text/plain'},
-      body: JSON.stringify({ source: 'TrailerPackerData', action: 'load' })
-    })
-    .then(r => r.text())
-    .then(text => { try { return JSON.parse(text); } catch(e) { return {}; } })
-    .then(data => {
-      const sheetsHasTrucks = data.trucks && Object.keys(data.trucks).length > 0;
-      if (sheetsHasTrucks) {
-        // Sheets has packed data — compare with localStorage.
-        // If localStorage has more placed items (more recent), prefer it to avoid overwriting with stale Sheets data.
-        const _sheetsCount = Object.values(data.trucks||{}).reduce((s,t)=>s+Object.keys(t.placed||{}).length,0);
-        const _lsStr = lsGet('truckPacker_trucks');
-        let _lsTrucks = null;
-        try { _lsTrucks = _lsStr ? JSON.parse(_lsStr) : null; } catch(e) {}
-        const _lsCount = _lsTrucks ? Object.values(_lsTrucks).reduce((s,t)=>s+Object.keys(t.placed||{}).length,0) : 0;
-        const _srcTrucks = (_lsCount > _sheetsCount && _lsTrucks) ? _lsTrucks : data.trucks;
-        if (_lsCount > _sheetsCount && _lsTrucks) console.log('[TP Load] localStorage has more placed items ('+_lsCount+' vs '+_sheetsCount+') — using localStorage');
-        setTrucks(() => {
+    const load = async () => {
+      try {
+        const [layoutsSnap, metaSnap, statusSnap] = await Promise.all([
+          db.collection('layouts').get(),
+          db.collection('meta').get(),
+          db.collection('status').get(),
+        ]);
+
+        // ── Truck layouts ────────────────────────────────────────────────
+        if (!layoutsSnap.empty) {
           const base = initTrucks();
-          const merged = { ...base };
-          Object.keys(_srcTrucks).forEach(id => {
-            merged[id] = {
-              ...(base[id] || { info: emptyTruckInfo(id), placed: {}, history: [], counter: 1, scans: [] }),
-              ..._srcTrucks[id],
+          layoutsSnap.forEach(doc => {
+            const d = doc.data();
+            base[doc.id] = {
+              ...(base[doc.id] || { info: emptyTruckInfo(doc.id), placed: {}, history: [], counter: 1, scans: [] }),
+              placed: d.placed || {},
+              counter: d.counter || 1,
+              scans: d.scans || [],
+              info: d.info || base[doc.id]?.info || emptyTruckInfo(doc.id),
             };
-            if (!merged[id].scans) merged[id].scans = [];
           });
-          return merged;
-        });
-        // Merge truckLoaded: Sheets has status authority, localStorage supplies loadedAt backup
-        // (covers the case where the page refreshes before the 4-second Sheets save fires)
-        const _lsLoadedStr = lsGet('truckPacker_truckLoaded');
-        let _lsLoaded = null;
-        try { _lsLoaded = _lsLoadedStr ? JSON.parse(_lsLoadedStr) : null; } catch(e) {}
-        if (data.truckLoaded) {
-          const _ml = {};
-          Object.keys(data.truckLoaded).forEach(id => {
-            _ml[id] = {...data.truckLoaded[id]};
-            // If Sheets has no loadedAt but localStorage does, use localStorage's
-            if (!_ml[id].loadedAt && _lsLoaded && _lsLoaded[id] && _lsLoaded[id].loadedAt) {
-              _ml[id].loadedAt = _lsLoaded[id].loadedAt;
+          setTrucks(base);
+        } else {
+          // First run — migrate layout from localStorage
+          console.log('[FS] layouts empty — migrating from localStorage');
+          try {
+            const savedTrucks = lsGet('truckPacker_trucks');
+            if (savedTrucks) {
+              const parsed = JSON.parse(savedTrucks);
+              const base = initTrucks();
+              Object.keys(base).forEach(id => { if (!parsed[id]) parsed[id] = base[id]; });
+              Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
+              setTrucks(parsed);
+              // Seed Firestore layouts async (only non-empty trucks)
+              setTimeout(() => {
+                Object.entries(parsed).forEach(([id, t]) => {
+                  if (Object.keys(t.placed || {}).length === 0) return;
+                  db.collection('layouts').doc(id).set({
+                    placed: t.placed || {}, counter: t.counter || 1,
+                    scans: (t.scans || []).slice(-50), info: t.info || emptyTruckInfo(id),
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                  }).catch(e => console.warn('[FS] seed layout failed:', id, e.message));
+                });
+              }, 2000);
             }
-          });
-          setTruckLoaded(_ml);
+          } catch(e) { console.warn('[FS] localStorage layout migration failed:', e); }
         }
-      } else {
-        // Sheets is empty — fall back to localStorage (first-time migration)
-        console.log('Sheets empty, checking localStorage for migration...');
+
+        // ── Truck status + notes ─────────────────────────────────────────
+        if (!statusSnap.empty) {
+          const newLoaded = {}, newNotes = {};
+          statusSnap.forEach(doc => {
+            const d = doc.data();
+            if (d.status) newLoaded[doc.id] = { status: d.status, loadedAt: d.loadedAt, statusAt: d.statusAt };
+            if (d.notes) newNotes[doc.id] = d.notes;
+          });
+          if (Object.keys(newLoaded).length > 0) setTruckLoaded(newLoaded);
+          if (Object.keys(newNotes).length > 0) setTruckNotes(newNotes);
+        } else {
+          // First run — migrate status from localStorage
+          try {
+            const savedLoaded = lsGet('truckPacker_truckLoaded');
+            if (savedLoaded) {
+              const parsed = JSON.parse(savedLoaded);
+              setTruckLoaded(parsed);
+              setTimeout(() => {
+                Object.entries(parsed).forEach(([id, v]) => {
+                  db.collection('status').doc(id).set({
+                    status: v.status || null, loadedAt: v.loadedAt || null,
+                    statusAt: v.statusAt || v.loadedAt || null, notes: '',
+                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                  }).catch(e => console.warn('[FS] seed status failed:', id, e.message));
+                });
+              }, 2000);
+            }
+          } catch(e) {}
+        }
+
+        // ── Truck metadata (drives Truck List view) ──────────────────────
+        if (!metaSnap.empty) {
+          const meta = {};
+          metaSnap.forEach(doc => { meta[doc.id] = doc.data(); });
+          setTruckMeta(meta);
+          setTruckListStatus('ok');
+        } else {
+          // First run — seed meta from GSheet (one-time only)
+          console.log('[FS] meta empty — seeding from GSheet');
+          setTruckListStatus('loading');
+          const SEED_SHEET_ID = '1l5_acuQFBomEIbdcaS9KGBOkIFKxr7eWluWtl_uXZCE';
+          const cbName = '__tlSeedCb_' + Date.now();
+          window[cbName] = (response) => {
+            delete window[cbName];
+            const el = document.getElementById('__tl_seed_script'); if (el) el.remove();
+            try {
+              if (response.status === 'error') throw new Error('Sheet error');
+              const rows = response?.table?.rows || [];
+              const meta = {};
+              rows.filter(r => r.c?.some(v => v?.v)).forEach((row, idx) => {
+                const c = row.c || [];
+                const id = c[1]?.v ? String(c[1].v).trim() : '';
+                if (!id) return;
+                meta[id] = {
+                  num: idx + 1,
+                  trailerNum: c[2]?.v != null ? String(c[2].v) : '',
+                  doorType:   c[3]?.v != null ? String(c[3].v) : '',
+                  length:     c[4]?.v != null ? String(c[4].v) : "53'",
+                  contents:   c[6]?.v != null ? String(c[6].v) : '',
+                };
+              });
+              setTruckMeta(meta);
+              setTruckListStatus('ok');
+              // Persist to Firestore
+              Object.entries(meta).forEach(([id, m]) => {
+                db.collection('meta').doc(id).set(m)
+                  .catch(e => console.warn('[FS] seed meta failed:', id, e.message));
+              });
+            } catch(e) { console.warn('[FS] GSheet meta seed failed:', e); setTruckListStatus('error'); }
+          };
+          const old = document.getElementById('__tl_seed_script'); if (old) old.remove();
+          const script = document.createElement('script'); script.id = '__tl_seed_script';
+          script.src = `https://docs.google.com/spreadsheets/d/${SEED_SHEET_ID}/gviz/tq?tqx=out:json;responseHandler:${cbName}&sheet=TruckLIST&range=A6:I90&headers=1`;
+          script.onerror = () => { delete window[cbName]; setTruckListStatus('error'); };
+          document.head.appendChild(script);
+        }
+      } catch(e) {
+        // Firestore unavailable — fall back to localStorage
+        console.warn('[FS] load failed, falling back to localStorage:', e.message);
         try {
           const savedTrucks = lsGet('truckPacker_trucks');
           if (savedTrucks) {
@@ -1682,26 +1788,12 @@ function App() {
           }
           const savedLoaded = lsGet('truckPacker_truckLoaded');
           if (savedLoaded) setTruckLoaded(JSON.parse(savedLoaded));
-        } catch(err) { console.warn('localStorage fallback failed:', err); }
+        } catch(err) {}
+      } finally {
+        setAppLoaded(true);
       }
-    })
-    .catch(e => {
-      // Network error — use localStorage
-      console.warn('Sheet load failed, using localStorage:', e.message);
-      try {
-        const savedTrucks = lsGet('truckPacker_trucks');
-        if (savedTrucks) {
-          const parsed = JSON.parse(savedTrucks);
-          const base = initTrucks();
-          Object.keys(base).forEach(id => { if (!parsed[id]) parsed[id] = base[id]; });
-          Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
-          setTrucks(parsed);
-        }
-        const savedLoaded = lsGet('truckPacker_truckLoaded');
-        if (savedLoaded) setTruckLoaded(JSON.parse(savedLoaded));
-      } catch(err) {}
-    })
-    .finally(() => setAppLoaded(true));
+    };
+    load();
   }, []);
 
   // ── Resize observer ───────────────────────────────────────────────────────
@@ -1757,71 +1849,43 @@ function App() {
   }, [mode]);
 
   // ── Scroll placed list to selected item ──────────────────────────────────
-  // Auto-save trucks + truckLoaded to Sheet (debounced 4s); localStorage as offline backup
+  // Auto-save truck layouts to Firestore (debounced 4s) + localStorage as offline backup
   useEffect(() => {
     if (!appLoaded) return;
     setSaveStatus('unsaved');
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      // Always save to localStorage as backup — with quota handling
-      // Strip undo history + trim scans before localStorage — these are the main size culprits.
-      // Undo works in-session; Sheets has the canonical copy including full scans.
+    saveTimerRef.current = setTimeout(async () => {
+      // Always write to localStorage as fast offline backup (strip undo history)
       const _trucksForStorage = {};
       Object.keys(trucks).forEach(tid => {
         const t = trucks[tid];
-        _trucksForStorage[tid] = { ...t,
-          history: [],                          // undo stacks can be 1-2 MB — skip for storage
-          scans: (t.scans||[]).slice(-50),      // keep only last 50 scans per truck
-        };
+        _trucksForStorage[tid] = { ...t, history: [], scans: (t.scans||[]).slice(-50) };
       });
       try { lsSet('truckPacker_trucks', JSON.stringify(_trucksForStorage)); } catch(e) {
-        console.warn('[TP] localStorage save failed even after stripping — check storage quota'); }
+        console.warn('[TP] localStorage save failed — check storage quota'); }
       try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
-      if (!JULIE_ENDPOINT) { setSaveStatus('saved'); return; }
-      // SAFETY GUARD: only save to Sheets if at least one truck has placed items.
-      // Saving with empty trucks calls updatePackerManifest_() which clears the Manifest tab.
-      const anyPlaced = Object.values(trucks).some(t => Object.keys(t.placed||{}).length > 0);
-      if (!anyPlaced) {
-        setSaveStatus('saved');
-        return; // No packing data — skip Sheets save to protect the Manifest
-      }
+
+      // Write truck layouts to Firestore (only trucks with placed items)
+      const packedTrucks = Object.entries(trucks).filter(([,t]) => Object.keys(t.placed||{}).length > 0);
+      if (packedTrucks.length === 0) { setSaveStatus('saved'); return; }
       setSaveStatus('saving');
-      // Pre-compute manifest rows so Apps Script writes exactly what the app shows
-      const _nsort = (a,b)=>{const p=s=>{const m=s.match(/^([A-Za-z]*)(\d+)$/);return m?[m[1].toUpperCase(),parseInt(m[2],10)]:[s,0];};const[aL,aN]=p(a),[bL,bN]=p(b);return aL!==bL?aL.localeCompare(bL):aN-bN;};
-      const manifestRows = [];
-      Object.keys(trucks).sort(_nsort).forEach(tid => {
-        const td = trucks[tid]||{};
-        const pl = td.placed||{};
-        const sc = td.scans||[];
-        Object.entries(pl).map(([id,p])=>({id:Number(id),...p})).sort((a,b)=>a.x_ft-b.x_ft||a.y_ft-b.y_ft).forEach(p => {
-          if (isUtilityItem(p.item)) return;
-          const lc = p.tripleStack?3:p.doubleStack?2:1;
-          for (let li=0;li<lc;li++) {
-            const lInfo = getLayerInfo(p,li);
-            const layerLabel = lc===1?'':lc===2?(li===0?'Top':'Bottom'):(li===0?'Top':li===1?'Middle':'Bottom');
-            const bc = (p.layerBarcodes?.[li]??(li===0?(p.barcode||''):'')).trim();
-            const isTruss = ['truss','other'].includes((p.item.cat||'').toLowerCase());
-            const ok = isTruss
-              ? sc.some(s=>s.truss&&s.matchId===p.id&&s.matchLi===li)
-              : bc ? sc.some(s=>!s.dup&&!s.truss&&s.code===bc)
-                   : sc.some(s=>!s.dup&&!s.truss&&s.matchId===p.id&&s.matchLi===li);
-            const loaded = truckLoaded[tid] && truckLoaded[tid].status === 'loaded';
-            manifestRows.push([tid, p.item.name||'', (p.item.w||'')+"'×"+(p.item.h||'')+"'", hexLabel(lInfo.hex), bc, lInfo.label||'', layerLabel, (ok||loaded)?'✓':'○']);
-          }
+      try {
+        const batch = db.batch();
+        packedTrucks.forEach(([tid, t]) => {
+          batch.set(db.collection('layouts').doc(tid), {
+            placed: t.placed || {},
+            counter: t.counter || 1,
+            scans: (t.scans||[]).slice(-50),
+            info: t.info || emptyTruckInfo(tid),
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          });
         });
-      });
-      console.log('[TP Save] manifest rows:', manifestRows.length, '| trucks:', Object.keys(trucks).length, '| placed trucks:', Object.values(trucks).filter(t=>Object.keys(t.placed||{}).length>0).map(t=>t.info?.id||'?').join(','));
-      fetch(JULIE_ENDPOINT, {
-        method: 'POST',
-        headers: {'Content-Type': 'text/plain'},
-        body: JSON.stringify({ source: 'TrailerPackerData', action: 'save', trucks, truckLoaded, manifest: manifestRows })
-      })
-      .then(r => r.text())
-      .then(text => {
-        try { const d = JSON.parse(text); setSaveStatus(d.ok ? 'saved' : 'error'); }
-        catch(e) { setSaveStatus('saved'); } // non-JSON but server ran = treat as ok
-      })
-      .catch(() => { setSaveStatus('error'); });
+        await batch.commit();
+        setSaveStatus('saved');
+      } catch(e) {
+        console.warn('[FS] layout save failed:', e.message);
+        setSaveStatus('error');
+      }
     }, 4000);
   }, [trucks, truckLoaded, appLoaded]);
 
@@ -1842,6 +1906,47 @@ function App() {
     }, 500);
   }, [trucks, truckLoaded, truckNotes, appLoaded]);
 
+  // ── Immediately write truckLoaded status changes to Firestore ───────────────
+  const prevTruckLoadedFSRef = useRef(null);
+  useEffect(() => {
+    if (!appLoaded) return;
+    const prev = prevTruckLoadedFSRef.current;
+    prevTruckLoadedFSRef.current = truckLoaded;
+    if (prev === null) return; // skip initial mount
+    // Find changed truck IDs
+    const allIds = new Set([...Object.keys(truckLoaded), ...(prev ? Object.keys(prev) : [])]);
+    allIds.forEach(tid => {
+      const cur = truckLoaded[tid], old = prev?.[tid];
+      if (JSON.stringify(cur) === JSON.stringify(old)) return;
+      db.collection('status').doc(tid).set({
+        status: cur?.status || null,
+        loadedAt: cur?.loadedAt || null,
+        statusAt: cur?.statusAt || null,
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true }).catch(e => console.warn('[FS] status write failed:', tid, e.message));
+    });
+  }, [truckLoaded, appLoaded]);
+
+  // ── Debounced notes sync to Firestore (1s) ──────────────────────────────────
+  const notesTimerRef = useRef(null);
+  const prevNotesFSRef = useRef({});
+  useEffect(() => {
+    if (!appLoaded) return;
+    if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
+    notesTimerRef.current = setTimeout(() => {
+      const prev = prevNotesFSRef.current;
+      const allIds = new Set([...Object.keys(truckNotes), ...Object.keys(prev)]);
+      allIds.forEach(tid => {
+        if ((truckNotes[tid]||'') === (prev[tid]||'')) return;
+        db.collection('status').doc(tid).set({
+          notes: truckNotes[tid] || '',
+          updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true }).catch(e => console.warn('[FS] notes write failed:', tid, e.message));
+      });
+      prevNotesFSRef.current = { ...truckNotes };
+    }, 1000);
+  }, [truckNotes, appLoaded]);
+
   // ── Save immediately on page unload (catches refresh/close before 4s debounce fires) ─────
   useEffect(() => {
     const onUnload = () => {
@@ -1850,15 +1955,7 @@ function App() {
       try { lsSet('truckPacker_trucks', JSON.stringify(_tfs)); } catch(e) {}
       try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
       try { lsSet('truckPacker_notes', JSON.stringify(truckNotes)); } catch(e) {}
-      // Best-effort async send to JULIE via sendBeacon (fire-and-forget, no response needed)
-      // NOTE: manifest is intentionally omitted here — sendBeacon with manifest:[] would clear the
-      // Manifest sheet. The 4s debounced save handles Sheets sync; beacon only updates status.
-      if (JULIE_ENDPOINT && Object.values(trucks).some(t=>Object.keys(t.placed||{}).length>0)) {
-        try {
-          navigator.sendBeacon(JULIE_ENDPOINT,
-            JSON.stringify({source:'TrailerPackerData', action:'save', trucks, truckLoaded}));
-        } catch(e) {}
-      }
+      // Firestore handles cloud sync — no sendBeacon needed
     };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
@@ -2649,44 +2746,16 @@ function App() {
     document.head.appendChild(script);
   };
 
-  const fetchTruckListData = (sheetId) => {
-    const cbName='__tlCb_'+Date.now();
-    window[cbName] = (response) => {
-      delete window[cbName]; const el=document.getElementById('__tl_script'); if(el)el.remove();
-      try {
-        if(response.status==='error') throw new Error('Sheet error');
-        const cols=response?.table?.cols||[];
-        const rows=response?.table?.rows||[];
-        setTruckListHeaders(cols.map(c=>c.label||''));
-        setTruckListRows(rows
-          .map(row=>(row.c||[]).map(cell=>cell?.v!=null?String(cell.v):''))
-          .filter(r=>r.some(v=>v.trim()!=='')));
-        setTruckListStatus('ok');
-      } catch(e) { setTruckListStatus('error'); }
-    };
-    const old=document.getElementById('__tl_script'); if(old)old.remove();
-    const script=document.createElement('script'); script.id='__tl_script';
-    script.src=`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json;responseHandler:${cbName}&sheet=TruckLIST&range=A6:I90&headers=1`;
-    script.onerror=()=>{ delete window[cbName]; setTruckListStatus('error'); };
-    document.head.appendChild(script);
-  };
+  // fetchTruckListData removed — truck metadata now lives in Firestore (/meta collection)
 
   // truckLoaded is included in the batch save above — no separate effect needed
 
 
-  useEffect(() => {
-    fetchGS(gsUrl);
-    const m=gsUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    if(m) { fetchLibrary(m[1]); fetchTruckListData(m[1]); }
-  }, []);
-
+  // (TruckLIST sync removed — truck metadata now lives in Firestore)
+  // GSheet connect still available for item palette (library) sync
   useEffect(() => {
     if(pollRef.current) clearInterval(pollRef.current);
-    if(gsStatus==='ok'&&gsUrl) pollRef.current=setInterval(()=>{
-    fetchGS(gsUrl);
-    const pm=gsUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    if(pm) fetchTruckListData(pm[1]);
-  },30000);
+    if(gsStatus==='ok'&&gsUrl) pollRef.current=setInterval(()=>{ fetchGS(gsUrl); }, 30000);
     return ()=>{ if(pollRef.current) clearInterval(pollRef.current); };
   }, [gsStatus, gsUrl]);
 
@@ -2704,6 +2773,20 @@ function App() {
   }, [view]);
 
   const handleSave = () => { setSaveJson(JSON.stringify({version:2,trucks},null,2)); setModal('save'); };
+
+  // ── Inline edit: save truck metadata cell to Firestore ───────────────────
+  const saveMeta = (tid, colIdx, value) => {
+    setTlEditing(null);
+    const colKey = colIdx === 2 ? 'trailerNum' : 'contents'; // col 2=TRAILER ID, col 5=CONTENTS
+    setTruckMeta(prev => ({ ...prev, [tid]: { ...(prev[tid]||{}), [colKey]: value } }));
+    // Keep trucks[tid].info in sync (used by Signs view)
+    setTrucks(t => {
+      if (!t[tid]) return t;
+      return { ...t, [tid]: { ...t[tid], info: { ...(t[tid].info||emptyTruckInfo(tid)), [colKey]: value } } };
+    });
+    db.collection('meta').doc(tid).set({ [colKey]: value }, { merge: true })
+      .catch(e => console.warn('[FS] meta write failed:', tid, e.message));
+  };
   const handleLoad = () => { setLoadJson(''); setLoadMsg(''); setModal('load'); };
 
   const sendToChat = async (message, whId) => {
@@ -4562,8 +4645,8 @@ function App() {
           <div className="tl-body">
             {filteredRows.length===0
               ? <div className="tl-empty">
-                  {truckListRows.length===0
-                    ? <>No data yet.<br/>Connect a Google Sheet to load the truck list.</>
+                  {truckListRows.every(r=>r.every(v=>!v))
+                    ? <>Loading truck data from Firestore…</>
                     : 'No trucks match the current filter.'}
                 </div>
               : (
@@ -4593,11 +4676,24 @@ function App() {
                       const hasTruck=Object.keys(trucks).includes(tid);
                       return (
                         <tr key={ri} style={sCfg?{background:sCfg.rowBg}:{}}>
-                          {row.map((cell,ci)=>(
-                            <td key={ci} className={ci===1?'tl-td-id':''} data-label={truckListHeaders[ci]||''}>
-                              {cell||<span className="tl-td-ph">—</span>}
-                            </td>
-                          ))}
+                          {row.map((cell,ci)=>{
+                            const isEditable = ci===2||ci===5; // TRAILER ID or CONTENTS
+                            const isEditing  = tlEditing?.tid===tid && tlEditing?.col===ci;
+                            return (
+                              <td key={ci} className={ci===1?'tl-td-id':''} data-label={truckListHeaders[ci]||''}>
+                                {isEditable ? (
+                                  isEditing
+                                    ? <input autoFocus className="tl-meta-input" defaultValue={cell}
+                                        onBlur={e=>saveMeta(tid,ci,e.target.value)}
+                                        onKeyDown={e=>{if(e.key==='Enter')e.target.blur();if(e.key==='Escape')setTlEditing(null);}}
+                                      />
+                                    : <span className="tl-meta-editable" onClick={()=>setTlEditing({tid,col:ci})}>
+                                        {cell||<span className="tl-td-ph">—</span>}
+                                      </span>
+                                ) : (cell||<span className="tl-td-ph">—</span>)}
+                              </td>
+                            );
+                          })}
                           <td data-label="Status">
                             <span className="tl-status-badge" style={sCfg
                               ?{background:sCfg.bg,color:sCfg.color,border:`1px solid ${sCfg.border}`}
