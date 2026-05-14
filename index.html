@@ -483,6 +483,18 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-dock-badge{display:inline-flex;align-items:center;gap:4px;background:rgba(68,138,255,.18);border:1px solid rgba(68,138,255,.4);color:#90cfff;border-radius:5px;padding:2px 6px;font-size:11px;font-weight:bold;white-space:nowrap;}
 .tl-dock-clear{background:none;border:none;color:rgba(144,164,174,.5);cursor:pointer;font-size:12px;padding:0 0 0 2px;line-height:1;display:inline-flex;align-items:center;}
 .tl-dock-clear:hover{color:#ef5350;}
+.tl-del-btn{background:none;border:1px solid rgba(229,57,53,.3);color:rgba(229,57,53,.5);cursor:pointer;font-size:11px;padding:2px 6px;border-radius:3px;line-height:1;transition:all .15s;}
+.tl-del-btn:hover{background:rgba(229,57,53,.12);color:#ef5350;border-color:#ef5350;}
+.tl-add-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:300;display:flex;align-items:center;justify-content:center;}
+.tl-add-box{background:#0d1f3c;border:1px solid #2a4a6a;border-radius:8px;padding:24px 28px;min-width:280px;display:flex;flex-direction:column;gap:14px;}
+.tl-add-box h3{font-size:13px;font-weight:bold;color:#90cfff;letter-spacing:.1em;margin:0;}
+.tl-add-input{background:rgba(10,24,56,.9);border:1px solid #448aff;color:#fff;font-size:14px;padding:8px 12px;border-radius:4px;width:100%;outline:none;font-family:monospace;text-transform:uppercase;letter-spacing:.06em;}
+.tl-add-input::placeholder{color:#4a6080;text-transform:none;}
+.tl-add-btns{display:flex;gap:8px;justify-content:flex-end;}
+.tl-add-confirm{background:rgba(68,138,255,.18);border:1px solid rgba(68,138,255,.5);color:#90cfff;font-size:12px;padding:6px 16px;border-radius:4px;cursor:pointer;transition:all .15s;}
+.tl-add-confirm:hover{background:rgba(68,138,255,.35);color:#fff;}
+.tl-add-cancel{background:none;border:1px solid #2a4a6a;color:#4a6080;font-size:12px;padding:6px 14px;border-radius:4px;cursor:pointer;transition:all .15s;}
+.tl-add-cancel:hover{color:#90A4AE;border-color:#90A4AE;}
 .tl-meta-editable{cursor:text;display:block;min-width:32px;border-bottom:1px dashed rgba(144,164,174,.25);padding:1px 2px;border-radius:2px;}
 .tl-meta-editable:hover{border-bottom-color:#90A4AE;background:rgba(144,164,174,.07);}
 .tl-meta-input{background:rgba(10,24,56,.9);border:1px solid #448aff;color:#fff;font-size:11px;padding:2px 5px;border-radius:3px;width:100%;min-width:60px;outline:none;font-family:inherit;}
@@ -1548,18 +1560,23 @@ function App() {
   // ── Truck List state ──────────────────────────────────────────────────────
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
   const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
-  const truckListRows = React.useMemo(() =>
-    TRUCK_IDS.map((id, idx) => {
+  const truckListRows = React.useMemo(() => {
+    const ids = Object.keys(truckMeta).length > 0
+      ? Object.keys(truckMeta).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'}))
+      : TRUCK_IDS;
+    return ids.map((id, idx) => {
       const m = truckMeta[id] || {};
       return [String(m.num ?? idx + 1), id, m.trailerNum || '', m.doorType || '', m.length || '', m.contents || ''];
-    })
-  , [truckMeta]);
+    });
+  }, [truckMeta]);
   const [truckListStatus,  setTruckListStatus]  = useState('idle');
-  const [tlEditing,        setTlEditing]        = useState(null); // {tid,col} for inline cell edit
+  const [tlEditing,        setTlEditing]        = useState(null);  // {tid,col} for inline cell edit
+  const [tlAddOpen,        setTlAddOpen]        = useState(false);
+  const [tlAddId,          setTlAddId]          = useState('');
   const [truckLoaded,      setTruckLoaded]      = useState({});
   const [truckNotes,       setTruckNotes]       = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_notes')||'{}');}catch{return{};} });
   const [tlSort,   setTlSort]   = useState({col:-1, dir:'asc'});
-  const [tlFilter, setTlFilter] = useState(()=>new Set(['staged','loaded','unloaded','backloaded','empty','pending']));
+  const [tlFilter, setTlFilter] = useState(()=>new Set(['staged','atdock','loaded','unloaded','backloaded','empty','pending']));
   const [tlProgressStatus, setTlProgressStatus] = useState('loaded');
   // ── Data Recovery state ───────────────────────────────────────────────────
   const [recoverScanResults, setRecoverScanResults] = useState(null);
@@ -2839,6 +2856,32 @@ function App() {
     db.collection('meta').doc(tid).set({ [colKey]: value }, { merge: true })
       .catch(e => console.warn('[FS] meta write failed:', tid, e.message));
   };
+
+  const addTrailer = (rawId) => {
+    const id = rawId.trim().toUpperCase();
+    if (!id) return;
+    if (truckMeta[id]) { alert(`${id} is already in the truck list.`); return; }
+    const num = Object.keys(truckMeta).length + 1;
+    setTruckMeta(prev => ({ ...prev, [id]: { num } }));
+    setTrucks(prev => ({ ...prev, [id]: { info: emptyTruckInfo(id), placed: {}, history: [], counter: 1, scans: [] } }));
+    db.collection('meta').doc(id).set({ num, createdAt: firebase.firestore.FieldValue.serverTimestamp() })
+      .catch(e => console.warn('[FS] add trailer meta failed:', id, e.message));
+    setTlAddOpen(false);
+    setTlAddId('');
+  };
+
+  const deleteTrailer = (tid) => {
+    if (!window.confirm(`Remove "${tid}" from the truck list?\n\nThis will delete its status, dock, and layout data from Firestore. This cannot be undone.`)) return;
+    setTruckMeta(prev  => { const n={...prev};  delete n[tid]; return n; });
+    setTrucks(prev     => { const n={...prev};  delete n[tid]; return n; });
+    setTruckLoaded(prev=> { const n={...prev};  delete n[tid]; return n; });
+    setTruckDock(prev  => { const n={...prev};  delete n[tid]; return n; });
+    setTruckNotes(prev => { const n={...prev};  delete n[tid]; return n; });
+    db.collection('meta').doc(tid).delete()   .catch(e=>console.warn('[FS] del meta:',e.message));
+    db.collection('status').doc(tid).delete() .catch(e=>console.warn('[FS] del status:',e.message));
+    db.collection('layouts').doc(tid).delete().catch(e=>console.warn('[FS] del layout:',e.message));
+  };
+
   const handleLoad = () => { setLoadJson(''); setLoadMsg(''); setModal('load'); };
 
   const sendToChat = async (message, whId) => {
@@ -4687,7 +4730,7 @@ function App() {
                 onChange={e=>setTlProgressStatus(e.target.value)}
                 title="Choose which status to track in the progress bar"
               >
-                {['staged','loaded','unloaded','backloaded','empty','pending'].map(s=>(
+                {['staged','atdock','loaded','unloaded','backloaded','empty','pending'].map(s=>(
                   <option key={s} value={s}>{s==='pending'?'— Pending':TRUCK_STATUS_CONFIG[s]?.label||s}</option>
                 ))}
               </select>
@@ -4695,11 +4738,11 @@ function App() {
               <div className="tl-progress-bar" style={{width:`${progressPct}%`,background:progressColor}}/>
             </div>
             <span className="tl-progress-label" style={{color:progressColor}}>{progressCount} / {totalCount}</span>
-            <button className={`mf-chip${tlFilter.size===6?' on':''}`}
-                onClick={()=>setTlFilter(new Set(['staged','loaded','unloaded','backloaded','empty','pending']))}
+            <button className={`mf-chip${tlFilter.size===7?' on':''}`}
+                onClick={()=>setTlFilter(new Set(['staged','atdock','loaded','unloaded','backloaded','empty','pending']))}
                 title="Show all statuses"
               >All</button>
-            {[['staged','▶'],['loaded','✓'],['unloaded','○'],['backloaded','↩'],['empty','✕'],['pending','—']].map(([v,l])=>(
+            {[['staged','▶'],['atdock','⬇'],['loaded','✓'],['unloaded','○'],['backloaded','↩'],['empty','✕'],['pending','—']].map(([v,l])=>(
               <button key={v} className={`mf-chip${tlFilter.has(v)?' on':''}`}
                 style={tlFilter.has(v)&&TRUCK_STATUS_CONFIG[v]?{background:TRUCK_STATUS_CONFIG[v].bg,color:TRUCK_STATUS_CONFIG[v].color,borderColor:TRUCK_STATUS_CONFIG[v].border}:{}}
                 onClick={()=>setTlFilter(prev=>{const n=new Set(prev);n.has(v)?n.delete(v):n.add(v);return n;})}
@@ -4711,6 +4754,10 @@ function App() {
               title={`Export ${filteredRows.length} truck${filteredRows.length!==1?'s':''} to PDF (current filter)`}
               disabled={filteredRows.length===0}
             >⬇ PDF</button>
+            <button className="btn" style={{fontSize:10,padding:'3px 10px',background:'rgba(68,138,255,.18)',border:'1px solid rgba(68,138,255,.4)',color:'#90cfff'}}
+              onClick={()=>{ setTlAddId(''); setTlAddOpen(true); }}
+              title="Add a new trailer to the truck list"
+            >+ Add Trailer</button>
             <span className="tl-sync" style={{marginLeft:0}}>
               {truckListStatus==='loading'?'⟳ syncing…':truckListStatus==='error'?'⚠ sync error':''}
             </span>
@@ -4836,6 +4883,7 @@ function App() {
                                   title={`Open ${tid} in the packer`}
                                 >🚛</button>
                               )}
+                              <button className="tl-del-btn" onClick={()=>deleteTrailer(tid)} title={`Remove ${tid} from list`}>✕</button>
                             </div>
                           </td>
                         </tr>
@@ -4846,6 +4894,27 @@ function App() {
               )
             }
           </div>
+
+          {/* ── Add Trailer Modal ── */}
+          {tlAddOpen && (
+            <div className="tl-add-modal" onClick={e=>{ if(e.target===e.currentTarget) setTlAddOpen(false); }}>
+              <div className="tl-add-box">
+                <h3>ADD TRAILER</h3>
+                <input
+                  autoFocus
+                  className="tl-add-input"
+                  placeholder="Enter trailer ID (e.g. FAV70)"
+                  value={tlAddId}
+                  onChange={e=>setTlAddId(e.target.value.toUpperCase())}
+                  onKeyDown={e=>{ if(e.key==='Enter') addTrailer(tlAddId); if(e.key==='Escape') setTlAddOpen(false); }}
+                />
+                <div className="tl-add-btns">
+                  <button className="tl-add-cancel" onClick={()=>setTlAddOpen(false)}>Cancel</button>
+                  <button className="tl-add-confirm" onClick={()=>addTrailer(tlAddId)} disabled={!tlAddId.trim()}>Add Trailer</button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     })()}
