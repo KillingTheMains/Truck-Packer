@@ -720,9 +720,10 @@ const CHAT_MSG_TEMPLATES = [
   {key:'backloaded', icon:'🟠', label:'Is Backloaded',    text: id=>`${id} IS BACKLOADED`,      color:'#FF9800', bg:'rgba(255,152,0,.12)',  border:'rgba(255,152,0,.4)'},
   {key:'empty',      icon:'🔴', label:'Is Empty',         text: id=>`${id} IS EMPTY`,           color:'#E53935', bg:'rgba(229,57,53,.12)',  border:'rgba(229,57,53,.4)'},
 ];
-const TRUCK_STATUS_CYCLE  = ['staged','loaded','unloaded','backloaded','empty'];
+const TRUCK_STATUS_CYCLE  = ['staged','atdock','loaded','unloaded','backloaded','empty'];
 const TRUCK_STATUS_CONFIG = {
   staged:     {label:'▶ Staged',     color:'#448aff', border:'rgba(68,138,255,.5)',  bg:'rgba(68,138,255,.15)',  rowBg:'rgba(68,138,255,.07)'},
+  atdock:     {label:'⬇ At Dock',    color:'#CE93D8', border:'rgba(206,147,216,.5)', bg:'rgba(206,147,216,.15)', rowBg:'rgba(206,147,216,.06)'},
   loaded:     {label:'✓ Loaded',     color:'#43A047', border:'rgba(67,160,71,.5)',   bg:'rgba(67,160,71,.15)',   rowBg:'rgba(67,160,71,.07)'},
   unloaded:   {label:'○ Unloaded',   color:'#e6c200', border:'rgba(230,194,0,.5)',   bg:'rgba(253,216,53,.12)',  rowBg:'rgba(253,216,53,.05)'},
   backloaded: {label:'↩ Backloaded', color:'#FF9800', border:'rgba(255,152,0,.5)',   bg:'rgba(255,152,0,.13)',   rowBg:'rgba(255,152,0,.06)'},
@@ -2794,9 +2795,17 @@ function App() {
       pickupSet.forEach(tid => { next[tid] = dock; });
       return next;
     });
+    // Auto-set status to "At Dock" for all dispatched trucks
+    setTruckLoaded(prev => {
+      const next = { ...prev };
+      pickupSet.forEach(tid => {
+        next[tid] = { status: 'atdock', loadedAt: Date.now(), statusAt: Date.now() };
+      });
+      return next;
+    });
     pickupSet.forEach(tid => {
       db.collection('status').doc(tid).set(
-        { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+        { dock, status: 'atdock', updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
     });
