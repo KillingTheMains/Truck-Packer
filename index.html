@@ -1556,7 +1556,8 @@ function App() {
   const [truckDock,            setTruckDock]            = useState({}); // {truckId: dockNumber string}
   // ── History log ───────────────────────────────────────────────────────────
   const [activityLog,   setActivityLog]   = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_history')||'[]');}catch(e){return[];} });
-  const [historyFilter, setHistoryFilter] = useState('ALL');
+  const [historyFilter,     setHistoryFilter]     = useState('ALL');
+  const [historyTruckFilter, setHistoryTruckFilter] = useState('');
   // ── Truck List state ──────────────────────────────────────────────────────
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
   const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
@@ -1679,10 +1680,11 @@ function App() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [layoutsSnap, metaSnap, statusSnap] = await Promise.all([
+        const [layoutsSnap, metaSnap, statusSnap, logsSnap] = await Promise.all([
           db.collection('layouts').get(),
           db.collection('meta').get(),
           db.collection('status').get(),
+          db.collection('logs').orderBy('ts','desc').limit(500).get(),
         ]);
 
         // ── Truck layouts ────────────────────────────────────────────────
@@ -1803,6 +1805,16 @@ function App() {
           script.onerror = () => { delete window[cbName]; setTruckListStatus('error'); };
           document.head.appendChild(script);
         }
+        // ── Activity log ─────────────────────────────────────────────────
+        if (!logsSnap.empty) {
+          const entries = [];
+          logsSnap.forEach(doc => entries.push(doc.data()));
+          // Sort client-side (already ordered desc by ts, just make sure)
+          entries.sort((a,b) => (b.ts||0)-(a.ts||0));
+          setActivityLog(entries);
+          console.log('[FS] loaded', entries.length, 'activity log entries');
+        }
+
       } catch(e) {
         // Firestore unavailable — fall back to localStorage
         console.warn('[FS] load failed, falling back to localStorage:', e.message);
@@ -2609,9 +2621,15 @@ function App() {
     };
     setActivityLog(prev => {
       const next = [entry,...prev].slice(0,500);
-      // Activity log is session-only — not persisted to localStorage (too large)
+      // Keep last 100 in localStorage as fallback cache
+      try { lsSet('truckPacker_history', JSON.stringify(next.slice(0,100))); } catch(e) {}
       return next;
     });
+    // Persist to Firestore so history survives across devices and refreshes
+    db.collection('logs').doc(entry.id).set({
+      ...entry,
+      serverTs: firebase.firestore.FieldValue.serverTimestamp(),
+    }).catch(e => console.warn('[FS] log write failed:', e.message));
     if(JULIE_ENDPOINT){
       fetch(JULIE_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({source:'TrailerPackerLog',entry})}).catch(()=>{});
@@ -2833,6 +2851,7 @@ function App() {
         { dock, status: 'atdock', updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
+      addHistoryEntry('DOCK', tid, 'atdock', `${tid} → DOCK ${dock} (dispatched)`);
     });
   };
 
@@ -2851,9 +2870,11 @@ function App() {
       { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     ).catch(e => console.warn('[FS] dock save failed:', tid, e.message));
+    addHistoryEntry('DOCK', tid, null, `${tid} → DOCK ${dock}`);
   };
 
   const clearDock = (tid) => {
+    addHistoryEntry('DOCK', tid, null, `${tid} → DOCK CLEARED`);
     setTruckDock(prev => { const n = { ...prev }; delete n[tid]; return n; });
     db.collection('status').doc(tid).set(
       { dock: null, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
@@ -5200,16 +5221,20 @@ function App() {
         empty:'#E53935', pending:'#546E7A'
       };
       const TYPE_COLOR = {
-        STATUS:'', DISPATCH_COPY:'#1E88E5', DISPATCH_SEND:'#4a8eff'
+        STATUS:'', DISPATCH_COPY:'#1E88E5', DISPATCH_SEND:'#4a8eff', DOCK:'#CE93D8'
       };
       const fmtTs = ts => {
         const d = new Date(ts);
         const mo = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][d.getMonth()];
         return `${String(d.getDate()).padStart(2,'0')} ${mo}  ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
       };
-      const filtered = historyFilter==='ALL' ? activityLog
+      const typeFiltered = historyFilter==='ALL' ? activityLog
         : historyFilter==='STATUS' ? activityLog.filter(e=>e.type==='STATUS')
+        : historyFilter==='DOCK' ? activityLog.filter(e=>e.type==='DOCK')
         : activityLog.filter(e=>e.type==='DISPATCH_COPY'||e.type==='DISPATCH_SEND');
+      const filtered = historyTruckFilter.trim()
+        ? typeFiltered.filter(e=>e.truckId&&e.truckId.toUpperCase().includes(historyTruckFilter.trim().toUpperCase()))
+        : typeFiltered;
       const badgeColor = e => {
         if(e.type==='STATUS') return STATUS_COLORS[e.status]||'#546E7A';
         return TYPE_COLOR[e.type]||'#546E7A';
@@ -5218,6 +5243,7 @@ function App() {
         if(e.type==='STATUS') return (e.status||'PENDING').toUpperCase().padEnd(9);
         if(e.type==='DISPATCH_COPY') return 'DISPATCH ';
         if(e.type==='DISPATCH_SEND') return 'DISPATCH↗';
+        if(e.type==='DOCK') return 'DOCK     ';
         return e.type;
       };
       return (
@@ -5225,10 +5251,19 @@ function App() {
           {/* Toolbar */}
           <div className="history-toolbar">
             <span style={{fontSize:10,color:'#1e3a4a',fontFamily:'monospace',letterSpacing:'.08em',marginRight:2}}>FILTER:</span>
-            {['ALL','STATUS','DISPATCH'].map(f=>(
+            {['ALL','STATUS','DOCK','DISPATCH'].map(f=>(
               <button key={f} className={`history-filter-btn${historyFilter===f?' hf-active':''}`}
                 onClick={()=>setHistoryFilter(f)}>{f}</button>
             ))}
+            <input
+              type="text"
+              placeholder="TRUCK…"
+              value={historyTruckFilter}
+              onChange={e=>setHistoryTruckFilter(e.target.value)}
+              style={{marginLeft:8,padding:'2px 7px',fontSize:10,fontFamily:'monospace',
+                background:'rgba(0,0,0,.25)',border:'1px solid rgba(100,180,255,.2)',
+                borderRadius:3,color:'#90d0ff',width:80,textTransform:'uppercase',outline:'none'}}
+            />
             <span style={{flex:1}}/>
             <span style={{fontSize:10,color:'#162a38',fontFamily:'monospace'}}>{filtered.length}/{activityLog.length} entries</span>
             <button className="history-filter-btn" style={{borderColor:'#2a0a0a',color:'#4a1a1a',marginLeft:8}}
@@ -5243,7 +5278,7 @@ function App() {
               <span className="h-cursor"/>{' '}<span style={{color:'#0e2418'}}>_</span>
             </div>
             {filtered.length===0 ? (
-              <div className="h-empty">// no entries{historyFilter!=='ALL'?` matching filter [${historyFilter}]`:' yet — status changes and dispatches will appear here'}</div>
+              <div className="h-empty">// no entries{historyFilter!=='ALL'||historyTruckFilter?` matching filter${historyTruckFilter?` [${historyTruckFilter.toUpperCase()}]`:` [${historyFilter}]`}`:' yet — status changes and dispatches will appear here'}</div>
             ) : filtered.map(entry=>(
               <React.Fragment key={entry.id}>
                 {/* Sub-lines for dispatch message body */}
