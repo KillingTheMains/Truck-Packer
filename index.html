@@ -486,6 +486,9 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-status-badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:bold;white-space:nowrap;}
 .tl-confirm-btn{padding:4px 11px;border-radius:5px;font-size:11px;font-weight:bold;cursor:pointer;border:1px solid #2a4a6a;background:#0d2040;color:#90A4AE;white-space:nowrap;transition:all .15s;}
 .tl-confirm-btn:hover{filter:brightness(1.2);}
+.tl-status-select{padding:4px 8px;border-radius:5px;font-size:11px;font-weight:bold;cursor:pointer;border:1px solid #2a4a6a;background:#0d2040;color:#90A4AE;outline:none;appearance:none;-webkit-appearance:none;min-width:100px;transition:all .15s;}
+.tl-status-select:hover{filter:brightness(1.15);}
+.tl-status-select option{background:#0d1f3c;color:#cdd9e8;font-weight:normal;}
 .tl-jump-btn{padding:3px 7px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid #1e3050;background:none;color:#446;transition:all .15s;line-height:1.4;}
 .tl-jump-btn:hover{background:#1a2a4a;color:#90cfff;border-color:#4a6a8a;}
 .tl-progress-wrap{flex:1;max-width:200px;min-width:80px;height:8px;background:#0a1526;border-radius:4px;overflow:hidden;border:1px solid #1a2a44;}
@@ -1532,6 +1535,8 @@ function App() {
   const [dispatchBringInDock,  setDispatchBringInDock]  = useState('');
   const [dispatchBringInEmpty, setDispatchBringInEmpty] = useState(false);
   const [dispatchCopied,       setDispatchCopied]       = useState(false);
+  const [dockPopup,            setDockPopup]            = useState(false);
+  const [dockInput,            setDockInput]            = useState('');
   // ── History log ───────────────────────────────────────────────────────────
   const [activityLog,   setActivityLog]   = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_history')||'[]');}catch(e){return[];} });
   const [historyFilter, setHistoryFilter] = useState('ALL');
@@ -2774,6 +2779,13 @@ function App() {
 
   const handleSave = () => { setSaveJson(JSON.stringify({version:2,trucks},null,2)); setModal('save'); };
 
+  const openDispatch = () => {
+    setDispatchPickup(new Set()); setDispatchBringIn(new Set());
+    setDispatchSearch(''); setDispatchPickupDock(''); setDispatchBringInDock('');
+    setDispatchBringInEmpty(false); setDispatchCopied(false);
+    setDispatchModal(true); setDockInput(''); setDockPopup(true);
+  };
+
   // ── Inline edit: save truck metadata cell to Firestore ───────────────────
   const saveMeta = (tid, colIdx, value) => {
     setTlEditing(null);
@@ -3116,7 +3128,7 @@ function App() {
       <span className={`save-pill ${saveStatus}`}>
         {saveStatus==='saved'?'✓ Saved':saveStatus==='saving'?'⟳ Saving…':saveStatus==='error'?'⚠ Save Error':'● Unsaved'}
       </span>
-      <button className="btn btn-dispatch-hdr" onClick={()=>{setDispatchPickup(new Set());setDispatchBringIn(new Set());setDispatchSearch('');setDispatchPickupDock('');setDispatchBringInDock('');setDispatchBringInEmpty(false);setDispatchCopied(false);setDispatchModal(true);}}>🚀 Dispatch</button>
+      <button className="btn btn-dispatch-hdr" onClick={openDispatch}>🚀 Dispatch</button>
       <button className={`btn btn-gs${gsStatus==='ok'?' connected':''}`} onClick={()=>setModal('settings')}>
         <span className={`gs-dot${gsStatus==='ok'?' ok':gsStatus==='error'?' err':gsStatus==='loading'?' loading':''}`}/>
         {gsStatus==='ok'?'GSheet ✓':'GSheets'}
@@ -3627,7 +3639,7 @@ function App() {
               <div className="qs-section">
                 <div className="panel-hdr" style={{background:'#080f1e',gap:4}}>
                   <span style={{flex:1}}>💬 QUICK SEND</span>
-                  <button onClick={()=>{setDispatchPickup(new Set());setDispatchBringIn(new Set());setDispatchSearch('');setDispatchPickupDock('');setDispatchBringInDock('');setDispatchBringInEmpty(false);setDispatchCopied(false);setDispatchModal(true);}}
+                  <button onClick={openDispatch}
                     style={{background:'#0d2040',border:'1px solid #2a4a6a',borderRadius:4,color:'#90cfff',fontSize:10,cursor:'pointer',padding:'2px 7px',whiteSpace:'nowrap'}}
                     title="Open driver dispatch builder"
                   >📋 Dispatch</button>
@@ -3997,6 +4009,37 @@ function App() {
 
         <div className="mf-count-bar">
           Showing <span>{filteredManifest.length}</span> of <span>{globalManifest.length}</span> manifest entries
+        </div>
+      </div>
+    )}
+
+    {/* ── DOCK NUMBER POPUP ── */}
+    {dockPopup && (
+      <div style={{position:'fixed',inset:0,zIndex:9100,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,.45)'}}>
+        <div style={{background:'#1a2a4a',border:'2px solid #448aff',borderRadius:12,padding:'28px 32px',width:320,boxShadow:'0 8px 40px rgba(0,0,0,.6)',display:'flex',flexDirection:'column',gap:16}}>
+          <div style={{fontSize:15,fontWeight:'bold',color:'#cdd9e8',letterSpacing:'.03em'}}>Which dock?</div>
+          <input
+            autoFocus
+            type="text"
+            placeholder="Dock number (e.g. 12)"
+            value={dockInput}
+            onChange={e=>setDockInput(e.target.value)}
+            onKeyDown={e=>{
+              if(e.key==='Enter'){setDispatchPickupDock(dockInput.trim());setDispatchBringInDock(dockInput.trim());setDockPopup(false);}
+              if(e.key==='Escape'){setDockPopup(false);}
+            }}
+            style={{background:'#0d1f3c',border:'1px solid #2a5a8a',borderRadius:6,color:'#fff',fontSize:15,padding:'9px 12px',outline:'none',width:'100%',boxSizing:'border-box'}}
+          />
+          <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+            <button
+              onClick={()=>setDockPopup(false)}
+              style={{background:'transparent',border:'1px solid #2a4a6a',borderRadius:6,color:'#90A4AE',fontSize:13,padding:'7px 18px',cursor:'pointer'}}
+            >Skip</button>
+            <button
+              onClick={()=>{setDispatchPickupDock(dockInput.trim());setDispatchBringInDock(dockInput.trim());setDockPopup(false);}}
+              style={{background:'#1565C0',border:'none',borderRadius:6,color:'#fff',fontSize:13,fontWeight:'bold',padding:'7px 22px',cursor:'pointer'}}
+            >Set Dock</button>
+          </div>
         </div>
       </div>
     )}
@@ -4717,24 +4760,24 @@ function App() {
                           </td>
                           <td className="tl-td-action">
                             <div style={{display:'flex',gap:5,alignItems:'center'}}>
-                              <button
-                                className="tl-confirm-btn"
+                              <select
+                                className="tl-status-select"
+                                value={status||''}
                                 style={sCfg?{background:sCfg.bg,color:sCfg.color,borderColor:sCfg.border}:{}}
-                                onClick={()=>{
-                                  let _next=null;
+                                onChange={e=>{
+                                  const next=e.target.value||null;
                                   setTruckLoaded(prev=>{
-                                    const cur=getTruckStatus(prev[tid]);
-                                    const idx=TRUCK_STATUS_CYCLE.indexOf(cur);
-                                    _next=idx<TRUCK_STATUS_CYCLE.length-1?TRUCK_STATUS_CYCLE[idx+1]:null;
-                                    if(!_next){const n={...prev};delete n[tid];return n;}
-                                    return {...prev,[tid]:{status:_next,loadedAt:Date.now(),statusAt:Date.now()}};
+                                    if(!next){const n={...prev};delete n[tid];return n;}
+                                    return {...prev,[tid]:{status:next,loadedAt:Date.now(),statusAt:Date.now()}};
                                   });
-                                  addHistoryEntry('STATUS',tid,_next,`${tid} → ${(_next||'PENDING').toUpperCase()}`);
+                                  addHistoryEntry('STATUS',tid,next,`${tid} → ${(next||'PENDING').toUpperCase()}`);
                                 }}
-                                title="Click to cycle: Confirm → Loaded → Unloaded → Backloaded → Empty → (reset)"
                               >
-                                {sCfg?sCfg.label:'○ Confirm'}
-                              </button>
+                                <option value="">○ Pending</option>
+                                {TRUCK_STATUS_CYCLE.map(s=>(
+                                  <option key={s} value={s}>{TRUCK_STATUS_CONFIG[s]?.label||s}</option>
+                                ))}
+                              </select>
                               {hasTruck && (
                                 <button className="tl-jump-btn"
                                   onClick={()=>{ switchTruck(tid); setView('packer'); }}
