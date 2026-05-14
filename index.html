@@ -4225,7 +4225,7 @@ function App() {
                 onClick={()=>{
                   const msg=buildMsg();
                   navigator.clipboard.writeText(msg);
-                  recordDocks(dispatchPickup, dispatchPickupDock);
+                  recordDocks(dispatchBringIn, dispatchBringInDock);
                   addHistoryEntry('DISPATCH_COPY',null,null,'dispatch message copied to clipboard',msg);
                   setDispatchCopied(true);
                   setTimeout(()=>{setDispatchCopied(false);setDispatchModal(false);},700);
@@ -4238,7 +4238,7 @@ function App() {
                 onClick={async()=>{
                   const msg=buildMsg();
                   await sendToChat(msg, effectiveWHId);
-                  recordDocks(dispatchPickup, dispatchPickupDock);
+                  recordDocks(dispatchBringIn, dispatchBringInDock);
                   addHistoryEntry('DISPATCH_SEND',null,null,'dispatch message sent via webhook',msg);
                   setDispatchModal(false);
                 }}
