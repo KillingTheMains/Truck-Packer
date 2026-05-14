@@ -2967,6 +2967,25 @@ function App() {
     db.collection('layouts').doc(tid).delete().catch(e=>console.warn('[FS] del layout:',e.message));
   };
 
+  const clearAllLayouts = () => {
+    const packed = Object.entries(trucks).filter(([,t]) => Object.keys(t.placed||{}).length > 0);
+    if (packed.length === 0) { alert('No truck layouts to clear — everything is already empty.'); return; }
+    if (!window.confirm(`⚠️ CLEAR ALL LAYOUTS?\n\nThis will erase the pack layout for ALL ${packed.length} packed truck${packed.length!==1?'s':''}.\n\nThis cannot be undone. Are you sure?`)) return;
+    if (!window.confirm(`⚠️ DOUBLE SURE?\n\nYou are about to permanently wipe ${packed.length} truck layout${packed.length!==1?'s':''}.\n\nClick OK only if you are absolutely certain.`)) return;
+    if (!window.confirm(`⚠️ TRIPLE CHECK — LAST CHANCE\n\nAll pack layouts will be permanently deleted from the app and Firestore.\n\nThere is no undo. Click OK to confirm.`)) return;
+    setTrucks(prev => {
+      const next = {};
+      Object.entries(prev).forEach(([id, t]) => {
+        next[id] = { ...t, placed: {}, counter: 1, scans: [] };
+      });
+      return next;
+    });
+    const batch = db.batch();
+    packed.forEach(([id]) => batch.delete(db.collection('layouts').doc(id)));
+    batch.commit().catch(e => console.warn('[FS] clearAll layouts failed:', e.message));
+    addHistoryEntry('STATUS', null, null, `ALL TRUCK LAYOUTS CLEARED (${packed.length} truck${packed.length!==1?'s':''})`);
+  };
+
   const handleLoad = () => { setLoadJson(''); setLoadMsg(''); setModal('load'); };
 
   const sendToChat = async (message, whId) => {
@@ -4847,6 +4866,10 @@ function App() {
               onClick={()=>{ setTlAddId(''); setTlAddOpen(true); }}
               title="Add a new trailer to the truck list"
             >+ Add Trailer</button>
+            <button className="btn" style={{fontSize:10,padding:'3px 10px',background:'rgba(183,28,28,.18)',border:'1px solid rgba(229,57,53,.4)',color:'#ef9a9a'}}
+              onClick={clearAllLayouts}
+              title="Clear all truck pack layouts (3 confirmations required)"
+            >🗑 Clear All Layouts</button>
             <span className="tl-sync" style={{marginLeft:0}}>
               {truckListStatus==='loading'?'⟳ syncing…':truckListStatus==='error'?'⚠ sync error':''}
             </span>
