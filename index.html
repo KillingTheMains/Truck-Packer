@@ -1558,6 +1558,7 @@ function App() {
   const [activityLog,   setActivityLog]   = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_history')||'[]');}catch(e){return[];} });
   const [historyFilter,     setHistoryFilter]     = useState('ALL');
   const [historyTruckFilter, setHistoryTruckFilter] = useState('');
+  const [nowTick, setNowTick] = useState(Date.now());
   // ── Truck List state ──────────────────────────────────────────────────────
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
   const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
@@ -1609,6 +1610,7 @@ function App() {
   const apCanvasAreaRef = useRef(null);
   const apInputRef = useRef(null);
   useEffect(()=>{ if(view==='autopick'&&apInputRef.current) apInputRef.current.focus(); },[view]);
+  useEffect(()=>{ const t=setInterval(()=>setNowTick(Date.now()),1000); return()=>clearInterval(t); },[]);
   useEffect(()=>{
     if(view!=='autopick') return;
     const el = apCanvasAreaRef.current; if(!el) return;
@@ -4574,12 +4576,12 @@ function App() {
       const TLMONS=['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
       const fmtDuration = ts => {
         if(!ts) return '—';
-        const diff = Math.max(0, Date.now() - ts);
-        const m = Math.floor(diff / 60000);
-        if(m < 1) return 'just now';
-        if(m < 60) return `${m}m`;
-        const h = Math.floor(m/60), rm = m%60;
-        return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+        const diff = Math.max(0, nowTick - ts);
+        const s = Math.floor(diff / 1000);
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
       };
       const fmtLoadTs = ts => {
         if(!ts) return '—';
