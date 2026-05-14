@@ -480,6 +480,9 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-notes-input:focus{border-bottom-color:#448aff;color:#cdd9e8;background:rgba(68,138,255,.06);}
 .tl-notes-input::placeholder{color:#2a4a5a;}
 .tl-td-ph{color:#2a3a4a;}
+.tl-dock-badge{display:inline-flex;align-items:center;gap:4px;background:rgba(68,138,255,.18);border:1px solid rgba(68,138,255,.4);color:#90cfff;border-radius:5px;padding:2px 6px;font-size:11px;font-weight:bold;white-space:nowrap;}
+.tl-dock-clear{background:none;border:none;color:rgba(144,164,174,.5);cursor:pointer;font-size:12px;padding:0 0 0 2px;line-height:1;display:inline-flex;align-items:center;}
+.tl-dock-clear:hover{color:#ef5350;}
 .tl-meta-editable{cursor:text;display:block;min-width:32px;border-bottom:1px dashed rgba(144,164,174,.25);padding:1px 2px;border-radius:2px;}
 .tl-meta-editable:hover{border-bottom-color:#90A4AE;background:rgba(144,164,174,.07);}
 .tl-meta-input{background:rgba(10,24,56,.9);border:1px solid #448aff;color:#fff;font-size:11px;padding:2px 5px;border-radius:3px;width:100%;min-width:60px;outline:none;font-family:inherit;}
@@ -1537,6 +1540,7 @@ function App() {
   const [dispatchCopied,       setDispatchCopied]       = useState(false);
   const [dockPopup,            setDockPopup]            = useState(false);
   const [dockInput,            setDockInput]            = useState('');
+  const [truckDock,            setTruckDock]            = useState({}); // {truckId: dockNumber string}
   // ── History log ───────────────────────────────────────────────────────────
   const [activityLog,   setActivityLog]   = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_history')||'[]');}catch(e){return[];} });
   const [historyFilter, setHistoryFilter] = useState('ALL');
@@ -1705,14 +1709,16 @@ function App() {
 
         // ── Truck status + notes ─────────────────────────────────────────
         if (!statusSnap.empty) {
-          const newLoaded = {}, newNotes = {};
+          const newLoaded = {}, newNotes = {}, newDock = {};
           statusSnap.forEach(doc => {
             const d = doc.data();
             if (d.status) newLoaded[doc.id] = { status: d.status, loadedAt: d.loadedAt, statusAt: d.statusAt };
             if (d.notes) newNotes[doc.id] = d.notes;
+            if (d.dock)  newDock[doc.id]  = d.dock;
           });
           if (Object.keys(newLoaded).length > 0) setTruckLoaded(newLoaded);
-          if (Object.keys(newNotes).length > 0) setTruckNotes(newNotes);
+          if (Object.keys(newNotes).length > 0)  setTruckNotes(newNotes);
+          if (Object.keys(newDock).length > 0)   setTruckDock(newDock);
         } else {
           // First run — migrate status from localStorage
           try {
@@ -2778,6 +2784,31 @@ function App() {
   }, [view]);
 
   const handleSave = () => { setSaveJson(JSON.stringify({version:2,trucks},null,2)); setModal('save'); };
+
+  // Record dock assignment for pickup trucks when a dispatch is sent/copied
+  const recordDocks = (pickupSet, dockStr) => {
+    if (!dockStr.trim() || pickupSet.size === 0) return;
+    const dock = dockStr.trim().toUpperCase();
+    setTruckDock(prev => {
+      const next = { ...prev };
+      pickupSet.forEach(tid => { next[tid] = dock; });
+      return next;
+    });
+    pickupSet.forEach(tid => {
+      db.collection('status').doc(tid).set(
+        { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+        { merge: true }
+      ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
+    });
+  };
+
+  const clearDock = (tid) => {
+    setTruckDock(prev => { const n = { ...prev }; delete n[tid]; return n; });
+    db.collection('status').doc(tid).set(
+      { dock: null, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+      { merge: true }
+    ).catch(e => console.warn('[FS] dock clear failed:', tid, e.message));
+  };
 
   const openDispatch = () => {
     setDispatchPickup(new Set()); setDispatchBringIn(new Set());
@@ -4194,6 +4225,7 @@ function App() {
                 onClick={()=>{
                   const msg=buildMsg();
                   navigator.clipboard.writeText(msg);
+                  recordDocks(dispatchPickup, dispatchPickupDock);
                   addHistoryEntry('DISPATCH_COPY',null,null,'dispatch message copied to clipboard',msg);
                   setDispatchCopied(true);
                   setTimeout(()=>{setDispatchCopied(false);setDispatchModal(false);},700);
@@ -4206,6 +4238,7 @@ function App() {
                 onClick={async()=>{
                   const msg=buildMsg();
                   await sendToChat(msg, effectiveWHId);
+                  recordDocks(dispatchPickup, dispatchPickupDock);
                   addHistoryEntry('DISPATCH_SEND',null,null,'dispatch message sent via webhook',msg);
                   setDispatchModal(false);
                 }}
@@ -4705,6 +4738,7 @@ function App() {
                           <span className="sort-arrow">{tlSort.col===i?(tlSort.dir==='asc'?'▲':'▼'):'⇅'}</span>
                         </th>
                       ))}
+                      <th>Dock</th>
                       <th>Status</th>
                       <th>Status Since</th>
                       <th>Notes</th>
@@ -4737,6 +4771,15 @@ function App() {
                               </td>
                             );
                           })}
+                          <td data-label="Dock" style={{whiteSpace:'nowrap'}}>
+                            {truckDock[tid]
+                              ? <span className="tl-dock-badge">
+                                  {truckDock[tid]}
+                                  <button className="tl-dock-clear" onClick={()=>clearDock(tid)} title="Clear dock assignment">×</button>
+                                </span>
+                              : <span className="tl-td-ph">—</span>
+                            }
+                          </td>
                           <td data-label="Status">
                             <span className="tl-status-badge" style={sCfg
                               ?{background:sCfg.bg,color:sCfg.color,border:`1px solid ${sCfg.border}`}
