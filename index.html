@@ -4387,7 +4387,7 @@ function App() {
       const canSend = (dispatchPickup.size > 0 || dispatchBringIn.size > 0 || dispatchBringInEmpty) && !!effectiveWHId;
 
       return (
-        <div className="modal-overlay" onClick={()=>setDispatchModal(false)}>
+        <div className="modal-overlay" onClick={()=>{ setDispatchModal(false); setDockPopup(false); }}>
           <div className="modal" onClick={e=>e.stopPropagation()}
             style={{maxWidth:660,width:'95%',display:'flex',flexDirection:'column',maxHeight:'85vh'}}>
             <h2>📋 Driver Dispatch</h2>
@@ -4489,7 +4489,7 @@ function App() {
               ) : (
                 <span style={{flex:1,fontSize:11,color:'#445'}}>→ {webhooks[0]?.name||'No webhooks configured'}</span>
               )}
-              <button className="btn btn-undo" onClick={()=>setDispatchModal(false)}>Cancel</button>
+              <button className="btn btn-undo" onClick={()=>{ setDispatchModal(false); setDockPopup(false); }}>Cancel</button>
               <button
                 disabled={dispatchPickup.size===0&&dispatchBringIn.size===0&&!dispatchBringInEmpty}
                 onClick={()=>{
@@ -4498,7 +4498,7 @@ function App() {
                   recordDocks(dispatchBringIn, dispatchBringInDock);
                   addHistoryEntry('DISPATCH_COPY',null,null,'dispatch message copied to clipboard',msg);
                   setDispatchCopied(true);
-                  setTimeout(()=>{setDispatchCopied(false);setDispatchModal(false);},700);
+                  setTimeout(()=>{setDispatchCopied(false);setDispatchModal(false);setDockPopup(false);},700);
                 }}
                 style={{padding:'6px 14px',borderRadius:5,fontSize:12,fontWeight:'bold',cursor:(dispatchPickup.size>0||dispatchBringIn.size>0)?'pointer':'default',
                   background:dispatchCopied?'#1b5e20':'#0d2a0d',color:dispatchCopied?'#afffaf':'#4a9a4a',
@@ -4510,7 +4510,7 @@ function App() {
                   await sendToChat(msg, effectiveWHId);
                   recordDocks(dispatchBringIn, dispatchBringInDock);
                   addHistoryEntry('DISPATCH_SEND',null,null,'dispatch message sent via webhook',msg);
-                  setDispatchModal(false);
+                  setDispatchModal(false); setDockPopup(false);
                 }}
                 style={{padding:'6px 18px',borderRadius:5,fontSize:12,fontWeight:'900',cursor:canSend?'pointer':'default',letterSpacing:'.04em',
                   background:canSend?'linear-gradient(135deg,#0d3060,#1a5294)':'#0a1a2a',
@@ -5148,7 +5148,7 @@ function App() {
                                   setDispatchBringInEmpty(false);
                                   setDispatchCopied(false);
                                   setDockInput(dock);
-                                  setDockPopup(!dock); // skip dock prompt if we already know it
+                                  setDockPopup(dock ? false : true); // only ask if no dock pre-assigned
                                   setDispatchModal(true);
                                 }}
                                 title={`Quick dispatch ${tid}${truckDock[tid]?' from Dock '+truckDock[tid]:''} — opens dispatch window`}
