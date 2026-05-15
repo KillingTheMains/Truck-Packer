@@ -3918,11 +3918,11 @@ function App() {
                   navigator.clipboard.writeText(msg);
                   addHistoryEntry('DISPATCH_COPY',null,null,'dispatch message copied to clipboard',msg);
                   setDispatchCopied(true);
-                  const pickupList=[...dispatchPickup];
+                  const allDispatched=[...new Set([...dispatchPickup,...dispatchBringIn])];
                   setTimeout(()=>{
                     setDispatchCopied(false);
                     setDispatchModal(false);
-                    if(pickupList.length>0){setDispatchStatusTrucks(pickupList);setDispatchStatusModal(true);}
+                    if(allDispatched.length>0){setDispatchStatusTrucks(allDispatched);setDispatchStatusModal(true);}
                   },700);
                 }}
                 style={{padding:'6px 14px',borderRadius:5,fontSize:12,fontWeight:'bold',cursor:(dispatchPickup.size>0||dispatchBringIn.size>0)?'pointer':'default',
@@ -3932,11 +3932,11 @@ function App() {
               <button disabled={!canSend||!!sendingKey}
                 onClick={async()=>{
                   const msg=buildMsg();
-                  const pickupList=[...dispatchPickup];
+                  const allDispatched=[...new Set([...dispatchPickup,...dispatchBringIn])];
                   await sendToChat(msg, effectiveWHId);
                   addHistoryEntry('DISPATCH_SEND',null,null,'dispatch message sent via webhook',msg);
                   setDispatchModal(false);
-                  if(pickupList.length>0){setDispatchStatusTrucks(pickupList);setDispatchStatusModal(true);}
+                  if(allDispatched.length>0){setDispatchStatusTrucks(allDispatched);setDispatchStatusModal(true);}
                 }}
                 style={{padding:'6px 18px',borderRadius:5,fontSize:12,fontWeight:'900',cursor:canSend?'pointer':'default',letterSpacing:'.04em',
                   background:canSend?'linear-gradient(135deg,#0d3060,#1a5294)':'#0a1a2a',
@@ -3957,7 +3957,7 @@ function App() {
             <div style={{fontSize:12,color:'#6a8aaa'}}>
               {dispatchStatusTrucks.length===1
                 ? <>What's the new status for <strong style={{color:'#ccc'}}>{dispatchStatusTrucks[0]}</strong>?</>
-                : <>What's the new status for <strong style={{color:'#ccc'}}>{dispatchStatusTrucks.length} picked-up trucks</strong>? ({dispatchStatusTrucks.join(', ')})</>}
+                : <>What's the new status for <strong style={{color:'#ccc'}}>{dispatchStatusTrucks.join(', ')}</strong>?</>}
             </div>
           </div>
           <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:16}}>
