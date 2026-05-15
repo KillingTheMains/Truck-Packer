@@ -1591,6 +1591,8 @@ function App() {
   const [dispatchBringInDock,  setDispatchBringInDock]  = useState('');
   const [dispatchBringInEmpty, setDispatchBringInEmpty] = useState(false);
   const [dispatchCopied,       setDispatchCopied]       = useState(false);
+  const [dispatchStatusModal,  setDispatchStatusModal]  = useState(false);
+  const [dispatchStatusTrucks, setDispatchStatusTrucks] = useState([]);
   const [dockPopup,            setDockPopup]            = useState(false);
   const [dockInput,            setDockInput]            = useState('');
   const [truckDock,            setTruckDock]            = useState({}); // {truckId: dockNumber string}
@@ -1605,7 +1607,8 @@ function App() {
   const [caseLookupLoading, setCaseLookupLoading] = useState(false);
   const [caseReassignTruck, setCaseReassignTruck] = useState('');
   const caseAssignmentsRef = useRef({});
-  const [pickupStatusModal, setPickupStatusModal] = useState(null); // {pickupSet, dock} — pending dispatch awaiting status choice
+  const [pickupStatusModal,   setPickupStatusModal]   = useState(null); // {pickupSet, dock} — incoming truck status picker
+  const [outgoingStatusModal, setOutgoingStatusModal] = useState(null); // Set<truckId> — outgoing truck status picker
   // ── Truck List state ──────────────────────────────────────────────────────
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
   const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
@@ -4498,7 +4501,13 @@ function App() {
                   recordDocks(dispatchBringIn, dispatchBringInDock);
                   addHistoryEntry('DISPATCH_COPY',null,null,'dispatch message copied to clipboard',msg);
                   setDispatchCopied(true);
-                  setTimeout(()=>{setDispatchCopied(false);setDispatchModal(false);setDockPopup(false);},700);
+                  const allDispatched=[...new Set([...dispatchPickup,...dispatchBringIn])];
+                  setTimeout(()=>{
+                    setDispatchCopied(false);
+                    setDispatchModal(false);
+                    setDockPopup(false);
+                    if(allDispatched.length>0){setDispatchStatusTrucks(allDispatched);setDispatchStatusModal(true);}
+                  },700);
                 }}
                 style={{padding:'6px 14px',borderRadius:5,fontSize:12,fontWeight:'bold',cursor:(dispatchPickup.size>0||dispatchBringIn.size>0)?'pointer':'default',
                   background:dispatchCopied?'#1b5e20':'#0d2a0d',color:dispatchCopied?'#afffaf':'#4a9a4a',
@@ -4507,10 +4516,13 @@ function App() {
               <button disabled={!canSend||!!sendingKey}
                 onClick={async()=>{
                   const msg=buildMsg();
+                  const allDispatched=[...new Set([...dispatchPickup,...dispatchBringIn])];
                   await sendToChat(msg, effectiveWHId);
                   recordDocks(dispatchBringIn, dispatchBringInDock);
                   addHistoryEntry('DISPATCH_SEND',null,null,'dispatch message sent via webhook',msg);
-                  setDispatchModal(false); setDockPopup(false);
+                  setDispatchModal(false);
+                  setDockPopup(false);
+                  if(allDispatched.length>0){setDispatchStatusTrucks(allDispatched);setDispatchStatusModal(true);}
                 }}
                 style={{padding:'6px 18px',borderRadius:5,fontSize:12,fontWeight:'900',cursor:canSend?'pointer':'default',letterSpacing:'.04em',
                   background:canSend?'linear-gradient(135deg,#0d3060,#1a5294)':'#0a1a2a',
@@ -4521,6 +4533,52 @@ function App() {
         </div>
       );
     })()}
+
+    {/* ── DISPATCH STATUS CHANGE MODAL ── */}
+    {dispatchStatusModal && (
+      <div className="modal-overlay" onClick={()=>setDispatchStatusModal(false)}>
+        <div className="modal" onClick={e=>e.stopPropagation()} style={{maxWidth:380,width:'90%',padding:'20px 22px'}}>
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:15,fontWeight:'bold',color:'#90cfff',marginBottom:4}}>Update Truck Status</div>
+            <div style={{fontSize:12,color:'#6a8aaa'}}>
+              {dispatchStatusTrucks.length===1
+                ? <>What's the new status for <strong style={{color:'#ccc'}}>{dispatchStatusTrucks[0]}</strong>?</>
+                : <>What's the new status for <strong style={{color:'#ccc'}}>{dispatchStatusTrucks.join(', ')}</strong>?</>}
+            </div>
+          </div>
+          <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:16}}>
+            {TRUCK_STATUS_CYCLE.map(s=>{
+              const cfg=TRUCK_STATUS_CONFIG[s];
+              return (
+                <button key={s}
+                  onClick={()=>{
+                    const now=Date.now();
+                    setTruckLoaded(prev=>{
+                      const next={...prev};
+                      dispatchStatusTrucks.forEach(tid=>{next[tid]={status:s,loadedAt:now,statusAt:now};});
+                      return next;
+                    });
+                    dispatchStatusTrucks.forEach(tid=>addHistoryEntry('STATUS',tid,s,`${tid} → ${s.toUpperCase()} (post-dispatch)`));
+                    setDispatchStatusModal(false);
+                  }}
+                  style={{display:'flex',alignItems:'center',gap:10,padding:'9px 14px',borderRadius:6,
+                    border:`1px solid ${cfg.border}`,background:cfg.bg,color:cfg.color,
+                    fontSize:13,fontWeight:'bold',cursor:'pointer',textAlign:'left',transition:'filter .1s'}}
+                  onMouseEnter={e=>e.currentTarget.style.filter='brightness(1.2)'}
+                  onMouseLeave={e=>e.currentTarget.style.filter=''}
+                >
+                  <span style={{fontSize:16}}>{cfg.label.split(' ')[0]}</span>
+                  <span>{cfg.label.split(' ').slice(1).join(' ')}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div style={{textAlign:'right'}}>
+            <button className="btn btn-undo" onClick={()=>setDispatchStatusModal(false)}>Skip / No Change</button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* ── WEBHOOK MANAGEMENT MODAL ── */}
     {webhookModal && (
