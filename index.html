@@ -1559,7 +1559,7 @@ function App() {
   const [stacksOpen, setStacksOpen] = useState({});
   const [scale, setScale] = useState(18);
   // ── Manifest page state ──────────────────────────────────────────────────
-  const [view,        setView]        = useState('packer'); // 'packer' | 'manifest'
+  const [view,        setView]        = useState(()=>lsGet('truckPacker_view')||'packer');
   const [navOpen,     setNavOpen]     = useState(false);
   const [mfSearch,    setMfSearch]    = useState('');
   const [mfTruck,     setMfTruck]     = useState('');
@@ -1628,7 +1628,10 @@ function App() {
   const [truckLoaded,      setTruckLoaded]      = useState({});
   const [truckNotes,       setTruckNotes]       = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_notes')||'{}');}catch{return{};} });
   const [tlSort,   setTlSort]   = useState({col:-1, dir:'asc'});
-  const [tlFilter, setTlFilter] = useState(()=>new Set(['staged','atdock','loaded','unloaded','backloaded','empty','pending']));
+  const [tlFilter, setTlFilter] = useState(()=>{
+    try { const s=lsGet('truckPacker_tlFilter'); if(s) return new Set(JSON.parse(s)); } catch(e) {}
+    return new Set(['staged','atdock','loaded','unloaded','backloaded','empty','pending']);
+  });
   const [tlProgressStatus, setTlProgressStatus] = useState('loaded');
   // ── Data Recovery state ───────────────────────────────────────────────────
   const [recoverScanResults, setRecoverScanResults] = useState(null);
@@ -1661,6 +1664,8 @@ function App() {
   const apInputRef = useRef(null);
   useEffect(()=>{ if(view==='autopick'&&apInputRef.current) apInputRef.current.focus(); },[view]);
   useEffect(()=>{ const t=setInterval(()=>setNowTick(Date.now()),1000); return()=>clearInterval(t); },[]);
+  useEffect(()=>{ try{ lsSet('truckPacker_view', view); }catch(e){} }, [view]);
+  useEffect(()=>{ try{ lsSet('truckPacker_tlFilter', JSON.stringify([...tlFilter])); }catch(e){} }, [tlFilter]);
   useEffect(()=>{
     if(view!=='autopick') return;
     const el = apCanvasAreaRef.current; if(!el) return;
