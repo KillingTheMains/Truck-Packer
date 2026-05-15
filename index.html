@@ -1632,7 +1632,8 @@ function App() {
     try { const s=lsGet('truckPacker_tlFilter'); if(s) return new Set(JSON.parse(s)); } catch(e) {}
     return new Set(['staged','atdock','loaded','unloaded','backloaded','empty','pending']);
   });
-  const [tlProgressStatus, setTlProgressStatus] = useState('loaded');
+  const [tlProgressStatus,  setTlProgressStatus]  = useState('loaded');
+  const [tlOrderByStatus,   setTlOrderByStatus]   = useState(()=>lsGet('truckPacker_tlOrderByStatus')==='1');
   // ── Data Recovery state ───────────────────────────────────────────────────
   const [recoverScanResults, setRecoverScanResults] = useState(null);
   const [recoverPasteJson,   setRecoverPasteJson]   = useState('');
@@ -4820,12 +4821,22 @@ function App() {
         if(isNaN(d.getTime())) return '—';
         return `${String(d.getDate()).padStart(2,'0')}${TLMONS[d.getMonth()]} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
       };
+      const STATUS_SORT_ORDER = [...TRUCK_STATUS_CYCLE, 'pending'];
+      const statusRank = s => { const i=STATUS_SORT_ORDER.indexOf(s||'pending'); return i<0?STATUS_SORT_ORDER.length:i; };
       let sortedRows=[...truckListRows];
       if(tlSort.col>=0){
         sortedRows.sort((a,b)=>{
           const av=a[tlSort.col]||'', bv=b[tlSort.col]||'';
           const n=av.localeCompare(bv,undefined,{numeric:true,sensitivity:'base'});
           return tlSort.dir==='asc'?n:-n;
+        });
+      }
+      if(tlOrderByStatus){
+        sortedRows.sort((a,b)=>{
+          const sa=getTruckStatus(truckLoaded[a[1]||'']), sb=getTruckStatus(truckLoaded[b[1]||'']);
+          const rd=statusRank(sa)-statusRank(sb);
+          if(rd!==0) return rd;
+          return (a[1]||'').localeCompare(b[1]||'',undefined,{numeric:true,sensitivity:'base'});
         });
       }
       const filteredRows=sortedRows.filter(row=>{
@@ -5028,6 +5039,12 @@ function App() {
                 title={v==='pending'?'Pending (no status set)':TRUCK_STATUS_CONFIG[v]?.label}
               >{l}</button>
             ))}
+            <button
+              className={`mf-chip${tlOrderByStatus?' on':''}`}
+              onClick={()=>{const v=!tlOrderByStatus;setTlOrderByStatus(v);lsSet('truckPacker_tlOrderByStatus',v?'1':'');}}
+              title="Group and sort trucks by status, then by ID"
+              style={tlOrderByStatus?{background:'rgba(144,196,255,.18)',color:'#90cfff',borderColor:'rgba(144,196,255,.4)'}:{}}
+            >⇅ By Status</button>
             <button className="btn btn-pdf" style={{fontSize:10,padding:'3px 10px',marginLeft:'auto'}}
               onClick={exportTruckListPDF}
               title={`Export ${filteredRows.length} truck${filteredRows.length!==1?'s':''} to PDF (current filter)`}
