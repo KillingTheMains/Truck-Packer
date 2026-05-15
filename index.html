@@ -1582,9 +1582,6 @@ function App() {
   const [customMsg,      setCustomMsg]      = useState('');
   const [webhookModal,   setWebhookModal]   = useState(false);
   const [whEditList,     setWhEditList]     = useState([]);  // scratch list inside modal
-  const [quickDispatch,      setQuickDispatch]      = useState(null); // { tid, dock }
-  const [quickDispatchInput, setQuickDispatchInput] = useState('');
-  const [quickDispatchDock,  setQuickDispatchDock]  = useState('');
   const [dispatchModal,      setDispatchModal]      = useState(false);
   const [dispatchPickup,     setDispatchPickup]     = useState(()=>new Set());
   const [dispatchBringIn,    setDispatchBringIn]    = useState(()=>new Set());
@@ -5136,8 +5133,20 @@ function App() {
                                 >🚛</button>
                               )}
                               <button
-                                onClick={()=>{ setQuickDispatchInput(''); setQuickDispatchDock(''); setQuickDispatch({ tid, dock: truckDock[tid]||'' }); }}
-                                title={`Quick dispatch ${tid}${truckDock[tid]?' (Dock '+truckDock[tid]+')':''} — pick a replacement`}
+                                onClick={()=>{
+                                  const dock = truckDock[tid] || '';
+                                  setDispatchPickup(new Set([tid]));
+                                  setDispatchBringIn(new Set());
+                                  setDispatchSearch('');
+                                  setDispatchPickupDock(dock);
+                                  setDispatchBringInDock(dock);
+                                  setDispatchBringInEmpty(false);
+                                  setDispatchCopied(false);
+                                  setDockInput(dock);
+                                  setDockPopup(!dock); // skip dock prompt if we already know it
+                                  setDispatchModal(true);
+                                }}
+                                title={`Quick dispatch ${tid}${truckDock[tid]?' from Dock '+truckDock[tid]:''} — opens dispatch window`}
                                 style={{background:'none',border:'1px solid rgba(68,138,255,.3)',color:'rgba(100,180,255,.6)',cursor:'pointer',fontSize:12,padding:'2px 6px',borderRadius:3,lineHeight:1,transition:'all .15s'}}
                                 onMouseEnter={e=>{e.currentTarget.style.background='rgba(68,138,255,.15)';e.currentTarget.style.color='#90cfff';e.currentTarget.style.borderColor='rgba(68,138,255,.7)';}}
                                 onMouseLeave={e=>{e.currentTarget.style.background='none';e.currentTarget.style.color='rgba(100,180,255,.6)';e.currentTarget.style.borderColor='rgba(68,138,255,.3)';}}
@@ -5174,79 +5183,6 @@ function App() {
               </div>
             </div>
           )}
-
-          {/* ── QUICK DISPATCH MODAL ── */}
-          {quickDispatch && (()=>{
-            const { tid, dock } = quickDispatch;
-            const effectiveDock = quickDispatchDock || dock || '';
-            const replacement   = quickDispatchInput.trim().toUpperCase();
-            const allTrucks = Object.keys(truckMeta).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'}));
-            const filtered  = allTrucks.filter(t => t !== tid && (!quickDispatchInput.trim() || t.includes(quickDispatchInput.trim().toUpperCase())));
-            const confirm = () => {
-              if (!replacement) return;
-              recordDocks(new Set([replacement]), effectiveDock);
-              setQuickDispatch(null); setQuickDispatchInput(''); setQuickDispatchDock('');
-            };
-            return (
-              <div className="tl-add-modal" onClick={()=>{ setQuickDispatch(null); setQuickDispatchInput(''); setQuickDispatchDock(''); }}>
-                <div className="tl-add-box" style={{minWidth:360,maxWidth:460}} onClick={e=>e.stopPropagation()}>
-                  <h3 style={{marginBottom:14,letterSpacing:'.06em'}}>↗ QUICK DISPATCH</h3>
-
-                  {/* Outgoing truck */}
-                  <div style={{background:'rgba(229,57,53,.08)',border:'1px solid rgba(229,57,53,.25)',borderRadius:5,padding:'8px 12px',marginBottom:10,display:'flex',alignItems:'center',gap:10}}>
-                    <span style={{fontSize:10,color:'#78909c',fontFamily:'monospace',letterSpacing:'.05em',width:68,flexShrink:0}}>OUTGOING:</span>
-                    <span style={{fontSize:15,fontWeight:'bold',fontFamily:'monospace',color:'#ef9a9a'}}>{tid}</span>
-                    {dock && <span style={{fontSize:11,fontFamily:'monospace',color:'#90a4ae',marginLeft:'auto'}}>DOCK {dock}</span>}
-                  </div>
-
-                  {/* Optional dock override (only shown when no dock pre-assigned) */}
-                  {!dock && (
-                    <div style={{marginBottom:10}}>
-                      <div style={{fontSize:10,color:'#546e7a',fontFamily:'monospace',letterSpacing:'.05em',marginBottom:4}}>DOCK # (optional)</div>
-                      <input className="tl-add-input" style={{width:'100%',textTransform:'uppercase'}} placeholder="e.g. D3"
-                        value={quickDispatchDock} onChange={e=>setQuickDispatchDock(e.target.value.toUpperCase())}
-                      />
-                    </div>
-                  )}
-
-                  {/* Replacement input + truck chips */}
-                  <div style={{fontSize:10,color:'#546e7a',fontFamily:'monospace',letterSpacing:'.05em',marginBottom:6}}>REPLACEMENT TRUCK</div>
-                  <input autoFocus className="tl-add-input" style={{width:'100%',textTransform:'uppercase',marginBottom:8}}
-                    placeholder="Type to filter or click a truck below…"
-                    value={quickDispatchInput}
-                    onChange={e=>setQuickDispatchInput(e.target.value.toUpperCase())}
-                    onKeyDown={e=>{ if(e.key==='Enter') confirm(); if(e.key==='Escape'){ setQuickDispatch(null); setQuickDispatchInput(''); setQuickDispatchDock(''); } }}
-                  />
-                  <div style={{display:'flex',flexWrap:'wrap',gap:5,maxHeight:160,overflowY:'auto',marginBottom:14}}>
-                    {filtered.map(t => {
-                      const s = getTruckStatus(truckLoaded[t]);
-                      const cfg = s ? TRUCK_STATUS_CONFIG[s] : null;
-                      const isSelected = t === replacement;
-                      return (
-                        <button key={t}
-                          onClick={()=>setQuickDispatchInput(t)}
-                          style={{padding:'4px 10px',fontSize:11,fontFamily:'monospace',fontWeight:'bold',
-                            borderRadius:4,cursor:'pointer',transition:'all .12s',
-                            background: isSelected ? (cfg?.bg||'rgba(68,138,255,.25)') : 'rgba(255,255,255,.05)',
-                            border: isSelected ? `1px solid ${cfg?.border||'rgba(68,138,255,.6)'}` : '1px solid rgba(255,255,255,.1)',
-                            color: isSelected ? (cfg?.color||'#90cfff') : '#90a4ae',
-                          }}>
-                          {t}{cfg ? ' '+cfg.label.split(' ')[0] : ''}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div style={{display:'flex',gap:8}}>
-                    <button className="tl-add-confirm" style={{flex:1}} disabled={!replacement} onClick={confirm}>
-                      Dispatch {replacement || '—'}
-                    </button>
-                    <button className="tl-add-cancel" onClick={()=>{ setQuickDispatch(null); setQuickDispatchInput(''); setQuickDispatchDock(''); }}>Cancel</button>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
 
           {/* ── CASE LOOKUP MODAL ── */}
           {caseModalOpen && (
