@@ -5118,6 +5118,11 @@ function App() {
                                   });
                                   // Leaving At Dock → clear dock assignment automatically
                                   if(prevStatus==='atdock' && next!=='atdock') clearDock(tid);
+                                  // Arriving At Dock manually → ask for dock number if not already set
+                                  if(next==='atdock' && !truckDock[tid]) {
+                                    const d = window.prompt(`Dock number for ${tid}?`);
+                                    if(d && d.trim()) saveDock(tid, d.trim());
+                                  }
                                   addHistoryEntry('STATUS',tid,next,`${tid} → ${(next||'PENDING').toUpperCase()}`);
                                 }}
                               >
