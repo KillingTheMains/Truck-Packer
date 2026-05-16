@@ -69,9 +69,7 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .btn-pdf{background:#4a148c;color:#fff;}
 .btn-save{background:#1b5e20;color:#fff;}
 .btn-load{background:#0d47a1;color:#fff;}
-.btn-gs{background:#1a5276;color:#fff;}
 .btn-dispatch-hdr{background:#1a2a4a;color:#7dcfff;border:1px solid #2a5a8a;font-weight:bold;}
-.btn-gs.connected{background:#1a5e1a;color:#aaffaa;}
 .btn-rot{background:#374a2a;color:#cce;border:1px solid #5a7a40;}
 .btn-rot.active{background:#4a6e2a;color:#aeff80;border-color:#7ab840;}
 .mode-pill{padding:4px 12px;border-radius:10px;font-size:11px;font-weight:bold;cursor:pointer;border:none;white-space:nowrap;transition:background .15s;}
@@ -88,8 +86,6 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .info-lbl{color:#778;text-transform:uppercase;font-size:11px;font-weight:bold;white-space:nowrap;}
 .info-inp{background:transparent;border:none;border-bottom:1px solid #334;color:#ccc;font-size:13px;padding:1px 4px;outline:none;box-sizing:content-box;field-sizing:content;}
 .info-inp:focus{border-bottom-color:#90A4AE;color:#fff;}
-.gs-dot{width:7px;height:7px;border-radius:50%;background:#556;display:inline-block;margin-right:4px;}
-.gs-dot.ok{background:#43A047;} .gs-dot.err{background:#E53935;} .gs-dot.loading{background:#FFA726;}
 
 /* ── MAIN LAYOUT ── */
 .main{display:flex;flex:1;overflow:hidden;min-height:0;}
@@ -724,7 +720,7 @@ const vendorFromName = name => { for(const v of VENDORS) if(name.startsWith(v+' 
 const stripVendorPrefix = name => { for(const v of VENDORS) if(name.startsWith(v+' ')) return name.slice(v.length+1); return name; };
 const isUtilityItem = item => (item?.cat||'').toLowerCase() === 'general';
 
-const JULIE_ENDPOINT = ''; // Data now lives in Firestore — JULIE bot will be rebuilt separately
+// JULIE_ENDPOINT removed — JULIE bot will read directly from Firestore
 
 const CHAT_MSG_TEMPLATES = [
   {key:'staged',     icon:'🔵', label:'Is Staged',        text: id=>`${id} IS STAGED`,          color:'#448aff', bg:'rgba(68,138,255,.12)', border:'rgba(68,138,255,.4)'},
@@ -771,21 +767,6 @@ const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct
 const fmtDDMMMYYYY = d => {
   if(!d || isNaN(d.getTime())) return '';
   return `${String(d.getDate()).padStart(2,'0')}-${MONTHS_SHORT[d.getMonth()].toUpperCase()}-${d.getFullYear()}`;
-};
-const parseGvizDate = cell => {
-  if(!cell || cell.v == null) return '';
-  const v = cell.v;
-  // gviz returns dates as "Date(2025,11,25)" — month is 0-indexed
-  if(typeof v === 'string' && v.startsWith('Date(')) {
-    const m = v.match(/Date\((\d+),(\d+),(\d+)\)/);
-    if(m) return fmtDDMMMYYYY(new Date(+m[1], +m[2], +m[3]));
-  }
-  // Try native Date parse (covers ISO strings, etc.)
-  const d = new Date(v);
-  if(!isNaN(d.getTime())) return fmtDDMMMYYYY(d);
-  // Fall back to formatted value from sheet if present
-  if(cell.f) return cell.f;
-  return String(v);
 };
 
 // ── Manifest number helpers ───────────────────────────────────────────────
@@ -1540,16 +1521,12 @@ function App() {
   const [placedCatOpen, setPlacedCatOpen] = useState({});  // collapsed cats in placed list
   const [modal,      setModal]      = useState(null);
   const [pdfConfirm,  setPdfConfirm] = useState(false);
-  const SHEET_ID = '1l5_acuQFBomEIbdcaS9KGBOkIFKxr7eWluWtl_uXZCE';
-  const [gsUrl,      setGsUrl]      = useState(`https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit`);
-  const [gsStatus,   setGsStatus]   = useState('idle');
-  const [gsMsg,      setGsMsg]      = useState('');
   const [saveJson,   setSaveJson]   = useState('');
   const [loadJson,   setLoadJson]   = useState('');
   const [loadMsg,    setLoadMsg]    = useState('');
   const [library,    setLibrary]    = useState(DEFAULT_LIBRARY);
-  const [libStatus,  setLibStatus]  = useState('idle');
-  const pollRef      = useRef(null);
+  const [libModal,   setLibModal]   = useState(false);
+  const [libEditItem, setLibEditItem] = useState(null); // {idx, name, cat, w, h} or {idx:-1} for new
   const canvasRef    = useRef(null);
   const trailerRef   = useRef(null);
   const placedListRef = useRef(null);
@@ -1739,12 +1716,13 @@ function App() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap] = await Promise.all([
+        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap, libSnap] = await Promise.all([
           db.collection('layouts').get(),
           db.collection('meta').get(),
           db.collection('status').get(),
           db.collection('logs').orderBy('ts','desc').limit(500).get(),
           db.collection('cases').get(),
+          db.collection('config').doc('library').get(),
         ]);
 
         // ── Truck layouts ────────────────────────────────────────────────
@@ -1826,44 +1804,9 @@ function App() {
           setTruckMeta(meta);
           setTruckListStatus('ok');
         } else {
-          // First run — seed meta from GSheet (one-time only)
-          console.log('[FS] meta empty — seeding from GSheet');
-          setTruckListStatus('loading');
-          const SEED_SHEET_ID = '1l5_acuQFBomEIbdcaS9KGBOkIFKxr7eWluWtl_uXZCE';
-          const cbName = '__tlSeedCb_' + Date.now();
-          window[cbName] = (response) => {
-            delete window[cbName];
-            const el = document.getElementById('__tl_seed_script'); if (el) el.remove();
-            try {
-              if (response.status === 'error') throw new Error('Sheet error');
-              const rows = response?.table?.rows || [];
-              const meta = {};
-              rows.filter(r => r.c?.some(v => v?.v)).forEach((row, idx) => {
-                const c = row.c || [];
-                const id = c[1]?.v ? String(c[1].v).trim() : '';
-                if (!id) return;
-                meta[id] = {
-                  num: idx + 1,
-                  trailerNum: c[2]?.v != null ? String(c[2].v) : '',
-                  doorType:   c[3]?.v != null ? String(c[3].v) : '',
-                  length:     c[4]?.v != null ? String(c[4].v) : "53'",
-                  contents:   c[6]?.v != null ? String(c[6].v) : '',
-                };
-              });
-              setTruckMeta(meta);
-              setTruckListStatus('ok');
-              // Persist to Firestore
-              Object.entries(meta).forEach(([id, m]) => {
-                db.collection('meta').doc(id).set(m)
-                  .catch(e => console.warn('[FS] seed meta failed:', id, e.message));
-              });
-            } catch(e) { console.warn('[FS] GSheet meta seed failed:', e); setTruckListStatus('error'); }
-          };
-          const old = document.getElementById('__tl_seed_script'); if (old) old.remove();
-          const script = document.createElement('script'); script.id = '__tl_seed_script';
-          script.src = `https://docs.google.com/spreadsheets/d/${SEED_SHEET_ID}/gviz/tq?tqx=out:json;responseHandler:${cbName}&sheet=TruckLIST&range=A6:I90&headers=1`;
-          script.onerror = () => { delete window[cbName]; setTruckListStatus('error'); };
-          document.head.appendChild(script);
+          // No meta yet — that's fine, trucks are added manually via the app
+          console.log('[FS] meta empty — starting fresh');
+          setTruckListStatus('ok');
         }
         // ── Activity log ─────────────────────────────────────────────────
         if (!logsSnap.empty) {
@@ -1880,6 +1823,19 @@ function App() {
           casesSnap.forEach(doc => { ca[doc.id] = doc.data(); });
           caseAssignmentsRef.current = ca;
           console.log('[FS] loaded', Object.keys(ca).length, 'case records');
+        }
+
+        // ── Item library ───────────────────────────────────────────────────
+        if (libSnap.exists && libSnap.data()?.items?.length > 0) {
+          const items = libSnap.data().items.map(x => ({ ...x, ...catColor(x.cat) }));
+          setLibrary(items);
+          console.log('[FS] loaded', items.length, 'library items');
+        } else {
+          // First run — seed Firestore from DEFAULT_LIBRARY
+          console.log('[FS] library empty — seeding from DEFAULT_LIBRARY');
+          const seedItems = DEFAULT_LIBRARY.map(({hex, tc, ...rest}) => rest);
+          db.collection('config').doc('library').set({ items: seedItems })
+            .catch(e => console.warn('[FS] library seed failed:', e.message));
         }
 
       } catch(e) {
@@ -2149,7 +2105,15 @@ function App() {
       });
     }, err => console.warn('[FS] live meta listener error:', err.message));
 
-    return () => { unsubStatus(); unsubMeta(); };
+    // config/library → item library (syncs edits made on other clients)
+    const unsubLib = db.collection('config').doc('library').onSnapshot(snap => {
+      if (!snap.exists) return;
+      const items = snap.data()?.items;
+      if (!items?.length) return;
+      setLibrary(items.map(x => ({ ...x, ...catColor(x.cat) })));
+    }, err => console.warn('[FS] live library listener error:', err.message));
+
+    return () => { unsubStatus(); unsubMeta(); unsubLib(); };
   }, [appLoaded]);
 
   // ── Save immediately on page unload (catches refresh/close before 4s debounce fires) ─────
@@ -2794,10 +2758,6 @@ function App() {
       ...entry,
       serverTs: firebase.firestore.FieldValue.serverTimestamp(),
     }).catch(e => console.warn('[FS] log write failed:', e.message));
-    if(JULIE_ENDPOINT){
-      fetch(JULIE_ENDPOINT,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({source:'TrailerPackerLog',entry})}).catch(()=>{});
-    }
   }, []);
 
   const setItemColor = (id, hex, tc) =>
@@ -2897,78 +2857,13 @@ function App() {
       cls: !ok ? 'ghost-bad' : hasOverlap ? 'ghost-warn' : 'ghost-ok', gw, gh };
   }
 
-  // ── GSheets fetch ─────────────────────────────────────────────────────────
-  const fetchGS = (url) => {
-    const targetUrl = url || gsUrl;
-    const m = targetUrl.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-    if (!m) { setGsStatus('error'); setGsMsg('Invalid URL'); return; }
-    setGsStatus('loading'); setGsMsg('Connecting…');
-    const sheetId=m[1], cbName='__gsCb_'+Date.now();
-    window[cbName] = (response) => {
-      delete window[cbName]; const el=document.getElementById('__gs_script'); if(el)el.remove();
-      try {
-        if(response.status==='error') throw new Error(response.errors?.[0]?.detailed_message||'Sheet error');
-        const rows=response?.table?.rows||[]; const updates={}; let count=0;
-        rows.forEach(row=>{
-          const c=row.c; const rawId=c?.[1]?.v; if(!rawId) return;
-          const sid=String(rawId).trim(); if(!sid) return;
-          updates[sid]={ id:sid, trailerNum:c[2]?.v!=null?String(c[2].v):'', doorType:c[3]?.v!=null?String(c[3].v):'',
-            length:c[4]?.v!=null?String(c[4].v):"53'", contents:c[6]?.v!=null?String(c[6].v):'',
-            driver:c[7]?.v!=null?String(c[7].v):'', contact:c[8]?.v!=null?String(c[8].v):'',
-            pickupFrom:c[9]?.v!=null?String(c[9].v):'', pickupDate:c[11]?.v!=null?String(c[11].v):'',
-            destination:c[31]?.v!=null?String(c[31].v):'', deliveryDate:parseGvizDate(c[32]) };
-          count++;
-        });
-        setTrucks(t=>{ const n={...t}; Object.entries(updates).forEach(([id,info])=>{ if(!n[id]) n[id]={info:emptyTruckInfo(id),placed:{},history:[],counter:1,scans:[]}; n[id]={...n[id],info:{...n[id].info,...info}}; }); return n; });
-        setGsStatus('ok'); setGsMsg(`Synced ${count} trucks · ${new Date().toLocaleTimeString()}`);
-      } catch(e) { setGsStatus('error'); setGsMsg('Sync failed: '+e.message); }
-    };
-    const old=document.getElementById('__gs_script'); if(old)old.remove();
-    const script=document.createElement('script'); script.id='__gs_script';
-    script.src=`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json;responseHandler:${cbName}&sheet=TruckLIST&range=A6:AG90&headers=1`;
-    script.onerror=()=>{ delete window[cbName]; setGsStatus('error'); setGsMsg('Network error'); };
-    document.head.appendChild(script);
+  // ── Save item library to Firestore ────────────────────────────────────────
+  const saveLibrary = (items) => {
+    const toSave = items.map(({hex, tc, ...rest}) => rest);
+    db.collection('config').doc('library').set({ items: toSave })
+      .catch(e => console.warn('[FS] saveLibrary failed:', e.message));
+    setLibrary(items.map(x => ({ ...x, ...catColor(x.cat) })));
   };
-
-  const fetchLibrary = (sheetId) => {
-    setLibStatus('loading');
-    const cbName='__libCb_'+Date.now();
-    window[cbName] = (response) => {
-      delete window[cbName]; const el=document.getElementById('__lib_script'); if(el)el.remove();
-      try {
-        if(response.status==='error') throw new Error(response.errors?.[0]?.message||'Sheet error');
-        const rows=response?.table?.rows||[]; const items=[];
-        rows.forEach(row=>{
-          const c=row.c;
-          const name=c?.[1]?.v!=null?String(c[1].v).trim():'';
-          const cat =c?.[2]?.v!=null?String(c[2].v).trim():'';
-          const w   =c?.[3]?.v!=null?Number(c[3].v):null;
-          const h   =c?.[4]?.v!=null?Number(c[4].v):null;
-          if(!name||!cat||!w||!h||w<=0||h<=0) return;
-          const {hex,tc}=catColor(cat); items.push({name,cat,w,h,hex,tc});
-        });
-        if(items.length>0){ setLibrary(items); setLibStatus('ok'); } else setLibStatus('error');
-      } catch(e){ setLibStatus('error'); }
-    };
-    const old=document.getElementById('__lib_script'); if(old)old.remove();
-    const script=document.createElement('script'); script.id='__lib_script';
-    script.src=`https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:json;responseHandler:${cbName}&sheet=ITEM%20LIBRARY&headers=1`;
-    script.onerror=()=>{ delete window[cbName]; setLibStatus('error'); };
-    document.head.appendChild(script);
-  };
-
-  // fetchTruckListData removed — truck metadata now lives in Firestore (/meta collection)
-
-  // truckLoaded is included in the batch save above — no separate effect needed
-
-
-  // (TruckLIST sync removed — truck metadata now lives in Firestore)
-  // GSheet connect still available for item palette (library) sync
-  useEffect(() => {
-    if(pollRef.current) clearInterval(pollRef.current);
-    if(gsStatus==='ok'&&gsUrl) pollRef.current=setInterval(()=>{ fetchGS(gsUrl); }, 30000);
-    return ()=>{ if(pollRef.current) clearInterval(pollRef.current); };
-  }, [gsStatus, gsUrl]);
 
   useEffect(()=>{
     if(view!=='signs') return;
@@ -3495,10 +3390,6 @@ function App() {
         {saveStatus==='saved'?'✓ Saved':saveStatus==='saving'?'⟳ Saving…':saveStatus==='error'?'⚠ Save Error':'● Unsaved'}
       </span>
       <button className="btn btn-dispatch-hdr" onClick={openDispatch}>🚀 Dispatch</button>
-      <button className={`btn btn-gs${gsStatus==='ok'?' connected':''}`} onClick={()=>setModal('settings')}>
-        <span className={`gs-dot${gsStatus==='ok'?' ok':gsStatus==='error'?' err':gsStatus==='loading'?' loading':''}`}/>
-        {gsStatus==='ok'?'GSheet ✓':'GSheets'}
-      </button>
     </div>
 
     {view === 'packer' && <>
@@ -3526,9 +3417,7 @@ function App() {
       <div className="sidebar">
         <div className="sidebar-hdr" style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
           <span>Item Library</span>
-          <span style={{fontSize:'8px',color:libStatus==='ok'?'#43A047':libStatus==='error'?'#E53935':'#90A4AE',fontWeight:'normal'}}>
-            {libStatus==='ok'?`${library.length} items`:libStatus==='loading'?'loading…':libStatus==='error'?'sync error':''}
-          </span>
+          <button onClick={()=>{setLibEditItem(null);setLibModal(true);}} style={{fontSize:'9px',padding:'2px 6px',background:'rgba(255,255,255,.08)',border:'1px solid rgba(255,255,255,.2)',borderRadius:4,color:'#90cfff',cursor:'pointer'}}>✏ Edit</button>
         </div>
 
         <div style={{padding:'5px 8px 4px',display:'flex',gap:8,flexWrap:'wrap',borderBottom:'1px solid #1e2a44',background:'rgba(0,0,0,.15)'}}>
@@ -4685,24 +4574,73 @@ function App() {
       </div>
     )}
 
-    {/* ── MODALS ── */}
-    {modal==='settings' && (
-      <div className="modal-overlay" onClick={()=>setModal(null)}>
-        <div className="modal" onClick={e=>e.stopPropagation()}>
-          <h2>🔗 Google Sheets Connection</h2>
-          <div className="modal-row">
-            <label>Google Sheets URL</label>
-            <input placeholder="https://docs.google.com/spreadsheets/d/…" value={gsUrl} onChange={e=>setGsUrl(e.target.value)}/>
-          </div>
-          <p className="modal-note">Reads the <strong>TruckLIST</strong> tab — auto-syncs every 30s.<br/>Sheet must be shared as <strong>"Anyone with link can view"</strong>.</p>
-          {gsMsg && <div className={gsStatus==='ok'?'status-ok':'status-err'}>{gsMsg}</div>}
-          <div className="modal-btns">
-            <button className="btn btn-undo" onClick={()=>setModal(null)}>Cancel</button>
-            <button className="btn btn-gs" onClick={()=>fetchGS(gsUrl)} disabled={!gsUrl.trim()}>{gsStatus==='loading'?'Connecting…':'Connect & Sync'}</button>
+    {/* ── LIBRARY EDIT MODAL ── */}
+    {libModal && (()=>{
+      const cats = Object.keys(CAT_COLORS);
+      const form = libEditItem || {name:'',cat:cats[0],w:'',h:'',_idx:-1};
+      const setForm = (patch) => setLibEditItem(prev => ({...(prev||{name:'',cat:cats[0],w:'',h:'',_idx:-1}),...patch}));
+      const closeForm = () => setLibEditItem(null);
+      const saveItem = () => {
+        const nm=form.name.trim(), cat=form.cat, w=parseFloat(form.w), h=parseFloat(form.h);
+        if(!nm||!cat||!w||!h||w<=0||h<=0) return;
+        const newItem = {name:nm, cat, w, h, ...catColor(cat)};
+        let next;
+        if(form._idx===-1) { next=[...library, newItem]; }
+        else { next=library.map((x,i)=>i===form._idx?newItem:x); }
+        saveLibrary(next);
+        closeForm();
+      };
+      const deleteItem = (idx) => {
+        if(!window.confirm(`Delete "${library[idx].name}"?`)) return;
+        saveLibrary(library.filter((_,i)=>i!==idx));
+        closeForm();
+      };
+      return (
+        <div className="modal-overlay" onClick={()=>{setLibModal(false);closeForm();}}>
+          <div className="modal" style={{maxWidth:540,maxHeight:'85vh',display:'flex',flexDirection:'column',padding:0}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:'16px 20px 12px',borderBottom:'1px solid #2a3a5a',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <h2 style={{margin:0,fontSize:16}}>📦 Item Library ({library.length} items)</h2>
+              <button onClick={()=>{setLibModal(false);closeForm();}} style={{background:'none',border:'none',color:'#90A4AE',fontSize:18,cursor:'pointer',lineHeight:1}}>✕</button>
+            </div>
+            {/* Form: add / edit */}
+            <div style={{padding:'12px 20px',borderBottom:'1px solid #2a3a5a',background:'rgba(0,0,0,.2)'}}>
+              <div style={{fontSize:11,color:'#90cfff',fontWeight:'bold',marginBottom:8}}>{form._idx===-1?'➕ New Item':'✏ Edit Item'}</div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 140px 70px 70px',gap:6}}>
+                <input placeholder="Item name" value={form.name} onChange={e=>setForm({name:e.target.value})} style={{padding:'5px 8px',background:'#1a2a40',border:'1px solid #2a4a6a',borderRadius:4,color:'#e0e6f0',fontSize:12}}/>
+                <select value={form.cat} onChange={e=>setForm({cat:e.target.value})} style={{padding:'5px 8px',background:'#1a2a40',border:'1px solid #2a4a6a',borderRadius:4,color:'#e0e6f0',fontSize:12}}>
+                  {cats.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+                <input placeholder="W (ft)" type="number" min="0.5" step="0.5" value={form.w} onChange={e=>setForm({w:e.target.value})} style={{padding:'5px 8px',background:'#1a2a40',border:'1px solid #2a4a6a',borderRadius:4,color:'#e0e6f0',fontSize:12}}/>
+                <input placeholder="H (ft)" type="number" min="0.5" step="0.5" value={form.h} onChange={e=>setForm({h:e.target.value})} style={{padding:'5px 8px',background:'#1a2a40',border:'1px solid #2a4a6a',borderRadius:4,color:'#e0e6f0',fontSize:12}}/>
+              </div>
+              <div style={{display:'flex',gap:6,marginTop:8}}>
+                <button onClick={saveItem} style={{padding:'5px 14px',background:'#1F5C1F',border:'1px solid #2a8a2a',borderRadius:4,color:'#aaffaa',cursor:'pointer',fontSize:12,fontWeight:'bold'}}>{form._idx===-1?'Add Item':'Save Changes'}</button>
+                {form._idx!==-1 && <button onClick={closeForm} style={{padding:'5px 10px',background:'rgba(255,255,255,.06)',border:'1px solid #2a3a5a',borderRadius:4,color:'#90A4AE',cursor:'pointer',fontSize:12}}>Cancel</button>}
+              </div>
+            </div>
+            {/* Item list */}
+            <div style={{overflowY:'auto',flex:1}}>
+              {cats.filter(c=>library.some(x=>x.cat===c)).map(cat=>(
+                <div key={cat}>
+                  <div style={{padding:'6px 20px',fontSize:10,fontWeight:'bold',color:'#90A4AE',background:'rgba(0,0,0,.3)',letterSpacing:'0.5px',textTransform:'uppercase'}}>{cat}</div>
+                  {library.map((item,idx)=>item.cat!==cat?null:(
+                    <div key={idx} style={{display:'flex',alignItems:'center',padding:'5px 20px',borderBottom:'1px solid rgba(255,255,255,.04)',background:form._idx===idx?'rgba(144,207,255,.08)':'transparent'}}>
+                      <div style={{width:12,height:12,borderRadius:2,background:item.hex,marginRight:8,flexShrink:0}}/>
+                      <span style={{flex:1,fontSize:12,color:'#c8d8ea'}}>{item.name}</span>
+                      <span style={{fontSize:11,color:'#556',marginRight:12}}>{item.w}'×{item.h}'</span>
+                      <button onClick={()=>setLibEditItem({...item,_idx:idx})} style={{padding:'2px 8px',background:'rgba(255,255,255,.06)',border:'1px solid #2a3a5a',borderRadius:3,color:'#90cfff',cursor:'pointer',fontSize:11,marginRight:4}}>✏</button>
+                      <button onClick={()=>deleteItem(idx)} style={{padding:'2px 8px',background:'rgba(229,57,53,.1)',border:'1px solid rgba(229,57,53,.3)',borderRadius:3,color:'#ff8a80',cursor:'pointer',fontSize:11}}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
-    )}
+      );
+    })()}
+
+    {/* ── MODALS ── */}
     {modal==='save' && (
       <div className="modal-overlay" onClick={()=>setModal(null)}>
         <div className="modal" onClick={e=>e.stopPropagation()}>
