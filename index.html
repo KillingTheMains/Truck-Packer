@@ -1530,6 +1530,8 @@ function App() {
   const [eventName,  setEventName]  = useState('Load Out');
   const [eventStartedAt, setEventStartedAt] = useState(null);
   const [loadCounts, setLoadCounts] = useState({}); // {[truckId]: number} — load count for current event
+  const [loadCountOffset, setLoadCountOffset] = useState(0); // starting number for this event
+  const [editingLoadTotal, setEditingLoadTotal] = useState(false); // inline edit mode for the total
   const [newEventModal, setNewEventModal] = useState(false);
   const [newEventNameInput, setNewEventNameInput] = useState('');
   const canvasRef    = useRef(null);
@@ -1850,7 +1852,8 @@ function App() {
           if (d.name) setEventName(d.name);
           if (d.startedAt) setEventStartedAt(d.startedAt);
           if (d.loadCounts) setLoadCounts(d.loadCounts);
-          console.log('[FS] event:', d.name, '—', Object.values(d.loadCounts||{}).reduce((a,b)=>a+b,0), 'total loads');
+          if (d.startAt != null) setLoadCountOffset(d.startAt);
+          console.log('[FS] event:', d.name, '—', (d.startAt||0)+Object.values(d.loadCounts||{}).reduce((a,b)=>a+b,0), 'total loads');
         } else {
           // First run — seed default event
           console.log('[FS] no event doc — seeding Load Out');
@@ -2144,6 +2147,7 @@ function App() {
       if (d.name !== undefined) setEventName(d.name);
       if (d.startedAt !== undefined) setEventStartedAt(d.startedAt);
       if (d.loadCounts !== undefined) setLoadCounts(d.loadCounts || {});
+      if (d.startAt != null) setLoadCountOffset(d.startAt);
     }, err => console.warn('[FS] live event listener error:', err.message));
 
     return () => { unsubStatus(); unsubMeta(); unsubLib(); unsubEvent(); };
@@ -2912,7 +2916,8 @@ function App() {
     setEventName(name);
     setEventStartedAt(now);
     setLoadCounts({});
-    db.collection('config').doc('event').set({ name, startedAt: now, loadCounts: {} })
+    setLoadCountOffset(0);
+    db.collection('config').doc('event').set({ name, startedAt: now, loadCounts: {}, startAt: 0 })
       .catch(e => console.warn('[FS] startNewEvent failed:', e.message));
     setNewEventModal(false);
     setNewEventNameInput('');
@@ -5161,16 +5166,37 @@ function App() {
             <span className="tl-info-pill" style={{background:'rgba(90,110,140,.12)',color:'#546E7A',border:'1px solid rgba(90,110,140,.25)'}}>
               ○ Pending <strong>{pendingCount}</strong>
             </span>
-            <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
-              <span style={{fontSize:11,color:'#90cfff',fontWeight:'bold',letterSpacing:'.02em'}}>{eventName}</span>
-              <span className="tl-info-pill" style={{background:'rgba(67,160,71,.15)',color:'#81c784',border:'1px solid rgba(67,160,71,.4)',fontWeight:'normal'}}>
-                🔄 <strong>{Object.values(loadCounts).reduce((a,b)=>a+b,0)}</strong> total loads
-              </span>
-              <button onClick={()=>{setNewEventNameInput('');setNewEventModal(true);}}
-                style={{fontSize:10,padding:'2px 9px',background:'rgba(144,196,255,.1)',border:'1px solid rgba(144,196,255,.3)',borderRadius:4,color:'#90cfff',cursor:'pointer',whiteSpace:'nowrap'}}>
-                ＋ New Event
-              </button>
-            </span>
+            {(()=>{
+              const totalLoads = loadCountOffset + Object.values(loadCounts).reduce((a,b)=>a+b,0);
+              const saveOffset = (val) => {
+                const n = parseInt(val, 10);
+                if (isNaN(n) || n < 0) { setEditingLoadTotal(false); return; }
+                setLoadCountOffset(n);
+                setEditingLoadTotal(false);
+                db.collection('config').doc('event').update({ startAt: n })
+                  .catch(e => console.warn('[FS] startAt update failed:', e.message));
+              };
+              return (
+                <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+                  <span style={{fontSize:11,color:'#90cfff',fontWeight:'bold',letterSpacing:'.02em'}}>{eventName}</span>
+                  {editingLoadTotal
+                    ? <input autoFocus type="number" min="0" defaultValue={totalLoads}
+                        style={{width:70,padding:'2px 6px',fontSize:11,background:'#1a2a40',border:'1px solid #43A047',borderRadius:4,color:'#81c784',fontWeight:'bold'}}
+                        onBlur={e=>saveOffset(e.target.value)}
+                        onKeyDown={e=>{if(e.key==='Enter')saveOffset(e.target.value);if(e.key==='Escape')setEditingLoadTotal(false);}}/>
+                    : <span className="tl-info-pill" title="Click to set starting number"
+                        onClick={()=>setEditingLoadTotal(true)}
+                        style={{background:'rgba(67,160,71,.15)',color:'#81c784',border:'1px solid rgba(67,160,71,.4)',fontWeight:'normal',cursor:'pointer'}}>
+                        🔄 <strong>{totalLoads}</strong> total loads
+                      </span>
+                  }
+                  <button onClick={()=>{setNewEventNameInput('');setNewEventModal(true);}}
+                    style={{fontSize:10,padding:'2px 9px',background:'rgba(144,196,255,.1)',border:'1px solid rgba(144,196,255,.3)',borderRadius:4,color:'#90cfff',cursor:'pointer',whiteSpace:'nowrap'}}>
+                    ＋ New Event
+                  </button>
+                </span>
+              );
+            })()}
           </div>
           <div className="tl-body">
             {filteredRows.length===0
