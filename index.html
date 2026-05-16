@@ -1527,6 +1527,11 @@ function App() {
   const [library,    setLibrary]    = useState(DEFAULT_LIBRARY);
   const [libModal,   setLibModal]   = useState(false);
   const [libEditItem, setLibEditItem] = useState(null); // {idx, name, cat, w, h} or {idx:-1} for new
+  const [eventName,  setEventName]  = useState('Load Out');
+  const [eventStartedAt, setEventStartedAt] = useState(null);
+  const [loadCounts, setLoadCounts] = useState({}); // {[truckId]: number} — load count for current event
+  const [newEventModal, setNewEventModal] = useState(false);
+  const [newEventNameInput, setNewEventNameInput] = useState('');
   const canvasRef    = useRef(null);
   const trailerRef   = useRef(null);
   const placedListRef = useRef(null);
@@ -1716,13 +1721,14 @@ function App() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap, libSnap] = await Promise.all([
+        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap, libSnap, eventSnap] = await Promise.all([
           db.collection('layouts').get(),
           db.collection('meta').get(),
           db.collection('status').get(),
           db.collection('logs').orderBy('ts','desc').limit(500).get(),
           db.collection('cases').get(),
           db.collection('config').doc('library').get(),
+          db.collection('config').doc('event').get(),
         ]);
 
         // ── Truck layouts ────────────────────────────────────────────────
@@ -1836,6 +1842,20 @@ function App() {
           const seedItems = DEFAULT_LIBRARY.map(({hex, tc, ...rest}) => rest);
           db.collection('config').doc('library').set({ items: seedItems })
             .catch(e => console.warn('[FS] library seed failed:', e.message));
+        }
+
+        // ── Event + load counts ────────────────────────────────────────────
+        if (eventSnap.exists) {
+          const d = eventSnap.data();
+          if (d.name) setEventName(d.name);
+          if (d.startedAt) setEventStartedAt(d.startedAt);
+          if (d.loadCounts) setLoadCounts(d.loadCounts);
+          console.log('[FS] event:', d.name, '—', Object.values(d.loadCounts||{}).reduce((a,b)=>a+b,0), 'total loads');
+        } else {
+          // First run — seed default event
+          console.log('[FS] no event doc — seeding Load Out');
+          db.collection('config').doc('event').set({ name: 'Load Out', startedAt: Date.now(), loadCounts: {} })
+            .catch(e => console.warn('[FS] event seed failed:', e.message));
         }
 
       } catch(e) {
@@ -2021,6 +2041,10 @@ function App() {
     allIds.forEach(tid => {
       const cur = truckLoaded[tid], old = prev?.[tid];
       if (JSON.stringify(cur) === JSON.stringify(old)) return;
+      // Detect → loaded transition: increment load count for this event
+      if (cur?.status === 'loaded' && old?.status !== 'loaded') {
+        incrementLoadCount(tid);
+      }
       db.collection('status').doc(tid).set({
         status: cur?.status || null,
         loadedAt: cur?.loadedAt || null,
@@ -2113,7 +2137,16 @@ function App() {
       setLibrary(items.map(x => ({ ...x, ...catColor(x.cat) })));
     }, err => console.warn('[FS] live library listener error:', err.message));
 
-    return () => { unsubStatus(); unsubMeta(); unsubLib(); };
+    // config/event → event name + load counts (syncs across all clients)
+    const unsubEvent = db.collection('config').doc('event').onSnapshot(snap => {
+      if (!snap.exists) return;
+      const d = snap.data();
+      if (d.name !== undefined) setEventName(d.name);
+      if (d.startedAt !== undefined) setEventStartedAt(d.startedAt);
+      if (d.loadCounts !== undefined) setLoadCounts(d.loadCounts || {});
+    }, err => console.warn('[FS] live event listener error:', err.message));
+
+    return () => { unsubStatus(); unsubMeta(); unsubLib(); unsubEvent(); };
   }, [appLoaded]);
 
   // ── Save immediately on page unload (catches refresh/close before 4s debounce fires) ─────
@@ -2863,6 +2896,26 @@ function App() {
     db.collection('config').doc('library').set({ items: toSave })
       .catch(e => console.warn('[FS] saveLibrary failed:', e.message));
     setLibrary(items.map(x => ({ ...x, ...catColor(x.cat) })));
+  };
+
+  // ── Event: increment load count when a truck is loaded ────────────────────
+  const incrementLoadCount = (tid) => {
+    setLoadCounts(prev => ({ ...prev, [tid]: (prev[tid] || 0) + 1 }));
+    db.collection('config').doc('event').update({
+      [`loadCounts.${tid}`]: firebase.firestore.FieldValue.increment(1)
+    }).catch(e => console.warn('[FS] incrementLoadCount failed:', tid, e.message));
+  };
+
+  // ── Event: start a new event (resets all load counts) ────────────────────
+  const startNewEvent = (name) => {
+    const now = Date.now();
+    setEventName(name);
+    setEventStartedAt(now);
+    setLoadCounts({});
+    db.collection('config').doc('event').set({ name, startedAt: now, loadCounts: {} })
+      .catch(e => console.warn('[FS] startNewEvent failed:', e.message));
+    setNewEventModal(false);
+    setNewEventNameInput('');
   };
 
   useEffect(()=>{
@@ -4640,6 +4693,26 @@ function App() {
       );
     })()}
 
+    {/* ── NEW EVENT MODAL ── */}
+    {newEventModal && (
+      <div className="modal-overlay" onClick={()=>setNewEventModal(false)}>
+        <div className="modal" style={{maxWidth:400}} onClick={e=>e.stopPropagation()}>
+          <h2>🔄 Start New Event</h2>
+          <p className="modal-note">All per-trailer load counts reset to zero. History stays in the Activity Log.</p>
+          <div className="modal-row">
+            <label>Event Name</label>
+            <input autoFocus value={newEventNameInput} onChange={e=>setNewEventNameInput(e.target.value)}
+              placeholder="e.g. Load In, Load Out, Second Load Out…"
+              onKeyDown={e=>{if(e.key==='Enter'&&newEventNameInput.trim())startNewEvent(newEventNameInput.trim());}}/>
+          </div>
+          <div className="modal-btns">
+            <button className="btn btn-undo" onClick={()=>setNewEventModal(false)}>Cancel</button>
+            <button className="btn btn-save" onClick={()=>{if(newEventNameInput.trim())startNewEvent(newEventNameInput.trim());}} disabled={!newEventNameInput.trim()}>Start Event</button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* ── MODALS ── */}
     {modal==='save' && (
       <div className="modal-overlay" onClick={()=>setModal(null)}>
@@ -5088,6 +5161,16 @@ function App() {
             <span className="tl-info-pill" style={{background:'rgba(90,110,140,.12)',color:'#546E7A',border:'1px solid rgba(90,110,140,.25)'}}>
               ○ Pending <strong>{pendingCount}</strong>
             </span>
+            <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
+              <span style={{fontSize:11,color:'#90cfff',fontWeight:'bold',letterSpacing:'.02em'}}>{eventName}</span>
+              <span className="tl-info-pill" style={{background:'rgba(67,160,71,.15)',color:'#81c784',border:'1px solid rgba(67,160,71,.4)',fontWeight:'normal'}}>
+                🔄 <strong>{Object.values(loadCounts).reduce((a,b)=>a+b,0)}</strong> total loads
+              </span>
+              <button onClick={()=>{setNewEventNameInput('');setNewEventModal(true);}}
+                style={{fontSize:10,padding:'2px 9px',background:'rgba(144,196,255,.1)',border:'1px solid rgba(144,196,255,.3)',borderRadius:4,color:'#90cfff',cursor:'pointer',whiteSpace:'nowrap'}}>
+                ＋ New Event
+              </button>
+            </span>
           </div>
           <div className="tl-body">
             {filteredRows.length===0
@@ -5173,6 +5256,13 @@ function App() {
                               :{background:'rgba(90,110,140,.12)',color:'#546E7A',border:'1px solid rgba(90,110,140,.25)'}}>
                               {sCfg?sCfg.label:'○ Pending'}
                             </span>
+                            {(loadCounts[tid]||0)>1&&(
+                              <span title={`Loaded ${loadCounts[tid]}× this event`}
+                                style={{display:'inline-block',marginLeft:5,fontSize:9,fontWeight:'bold',padding:'1px 5px',borderRadius:3,
+                                  background:'rgba(67,160,71,.2)',color:'#81c784',border:'1px solid rgba(67,160,71,.4)'}}>
+                                ×{loadCounts[tid]}
+                              </span>
+                            )}
                           </td>
                           <td className="tl-td-ts" data-label="Since" title={status&&truckLoaded[tid]?.statusAt?fmtLoadTs(truckLoaded[tid].statusAt):''}>
                             <span className="tl-duration">{status&&truckLoaded[tid]?.statusAt?fmtDuration(truckLoaded[tid].statusAt):'—'}</span>
