@@ -514,6 +514,7 @@ body{font-family:Arial,sans-serif;background:#1a1a2e;color:#eee;}
 .tl-info-bar{background:#0a1220;border-bottom:1px solid #1a2a44;padding:6px 18px;display:flex;align-items:center;gap:8px;flex-shrink:0;flex-wrap:wrap;}
 .tl-info-pill{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;border-radius:10px;font-size:11px;font-weight:bold;white-space:nowrap;}
 .tl-sync{font-size:10px;color:#445;}
+@keyframes livePulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.4;transform:scale(.7);}}
 .tl-empty{padding:48px;text-align:center;color:#334;font-size:13px;line-height:1.8;}
 .tl-ph-hdr{color:#334;font-style:italic;font-weight:normal;text-transform:none;letter-spacing:0;}
 
@@ -2052,11 +2053,13 @@ function App() {
 
   // ── Immediately write truckLoaded status changes to Firestore ───────────────
   const prevTruckLoadedFSRef = useRef(null);
+  const fsInboundRef = useRef(false); // true while applying a remote Firestore snapshot — suppresses write-back
   useEffect(() => {
     if (!appLoaded) return;
     const prev = prevTruckLoadedFSRef.current;
     prevTruckLoadedFSRef.current = truckLoaded;
     if (prev === null) return; // skip initial mount
+    if (fsInboundRef.current) return; // remote update — don't echo back to Firestore
     // Find changed truck IDs
     const allIds = new Set([...Object.keys(truckLoaded), ...(prev ? Object.keys(prev) : [])]);
     allIds.forEach(tid => {
@@ -2076,6 +2079,7 @@ function App() {
   const prevNotesFSRef = useRef({});
   useEffect(() => {
     if (!appLoaded) return;
+    if (fsInboundRef.current) return; // remote update — don't echo back to Firestore
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
     notesTimerRef.current = setTimeout(() => {
       const prev = prevNotesFSRef.current;
@@ -2090,6 +2094,63 @@ function App() {
       prevNotesFSRef.current = { ...truckNotes };
     }, 1000);
   }, [truckNotes, appLoaded]);
+
+  // ── Real-time Firestore listeners — multi-user live sync ────────────────────
+  const [liveLastSync, setLiveLastSync] = React.useState(null);
+  useEffect(() => {
+    if (!appLoaded) return;
+    // status collection → truckLoaded + truckDock + truckNotes
+    const unsubStatus = db.collection('status').onSnapshot(snap => {
+      fsInboundRef.current = true;
+      snap.docChanges().forEach(change => {
+        const tid = change.doc.id;
+        if (change.type === 'removed') {
+          setTruckLoaded(prev => { const n={...prev}; delete n[tid]; return n; });
+          setTruckDock(prev   => { const n={...prev}; delete n[tid]; return n; });
+          setTruckNotes(prev  => { const n={...prev}; delete n[tid]; return n; });
+          return;
+        }
+        const d = change.doc.data();
+        setTruckLoaded(prev => {
+          const cur = { status: d.status||null, loadedAt: d.loadedAt||null, statusAt: d.statusAt||null };
+          if (JSON.stringify(prev[tid]) === JSON.stringify(cur)) return prev;
+          return { ...prev, [tid]: cur };
+        });
+        setTruckDock(prev => {
+          if (d.dock) return prev[tid]===d.dock ? prev : { ...prev, [tid]: d.dock };
+          if (!prev[tid]) return prev;
+          const n={...prev}; delete n[tid]; return n;
+        });
+        setTruckNotes(prev => {
+          const note = d.notes || '';
+          if ((prev[tid]||'') === note) return prev;
+          if (!note) { const n={...prev}; delete n[tid]; return n; }
+          return { ...prev, [tid]: note };
+        });
+      });
+      setLiveLastSync(Date.now());
+      // Reset flag after React effects run (effects run before setTimeout(0))
+      setTimeout(() => { fsInboundRef.current = false; }, 0);
+    }, err => console.warn('[FS] live status listener error:', err.message));
+
+    // meta collection → truckMeta (trailer adds/removes/edits)
+    const unsubMeta = db.collection('meta').onSnapshot(snap => {
+      snap.docChanges().forEach(change => {
+        const tid = change.doc.id;
+        if (change.type === 'removed') {
+          setTruckMeta(prev => { const n={...prev}; delete n[tid]; return n; });
+        } else {
+          setTruckMeta(prev => {
+            const incoming = change.doc.data();
+            if (JSON.stringify(prev[tid]) === JSON.stringify(incoming)) return prev;
+            return { ...prev, [tid]: incoming };
+          });
+        }
+      });
+    }, err => console.warn('[FS] live meta listener error:', err.message));
+
+    return () => { unsubStatus(); unsubMeta(); };
+  }, [appLoaded]);
 
   // ── Save immediately on page unload (catches refresh/close before 4s debounce fires) ─────
   useEffect(() => {
@@ -5069,6 +5130,14 @@ function App() {
             <span className="tl-sync" style={{marginLeft:0}}>
               {truckListStatus==='loading'?'⟳ syncing…':truckListStatus==='error'?'⚠ sync error':''}
             </span>
+            {liveLastSync && (
+              <span title={`Last live update: ${new Date(liveLastSync).toLocaleTimeString()}`}
+                style={{fontSize:10,color:'#43A047',display:'flex',alignItems:'center',gap:3,marginLeft:4}}>
+                <span style={{width:7,height:7,borderRadius:'50%',background:'#43A047',display:'inline-block',
+                  animation:'livePulse 2s ease-in-out infinite'}}/>
+                Live
+              </span>
+            )}
           </div>
           {/* Status counts info bar */}
           <div className="tl-info-bar">
