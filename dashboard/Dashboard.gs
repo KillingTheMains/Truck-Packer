@@ -1,5 +1,37 @@
 // ── Dashboard Web App ────────────────────────────────────────────────────────
 
+function getFirestoreEventData_() {
+  try {
+    var url = 'https://firestore.googleapis.com/v1/projects/ktm-logistics-b2309/databases/(default)/documents/config/event';
+    var resp = UrlFetchApp.fetch(url, {
+      method: 'get',
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200) return { eventName: '', totalLoads: 0 };
+    var doc = JSON.parse(resp.getContentText());
+    var fields = doc.fields || {};
+    var name = (fields.name && fields.name.stringValue) ? fields.name.stringValue : '';
+    var startAt = fields.startAt
+      ? (fields.startAt.integerValue ? parseInt(fields.startAt.integerValue)
+        : (fields.startAt.doubleValue ? Math.round(fields.startAt.doubleValue) : 0))
+      : 0;
+    var loadSum = 0;
+    if (fields.loadCounts && fields.loadCounts.mapValue && fields.loadCounts.mapValue.fields) {
+      var lc = fields.loadCounts.mapValue.fields;
+      Object.keys(lc).forEach(function(k) {
+        var v = lc[k];
+        loadSum += v.integerValue ? parseInt(v.integerValue)
+          : (v.doubleValue ? Math.round(v.doubleValue) : 0);
+      });
+    }
+    return { eventName: name, totalLoads: startAt + loadSum };
+  } catch(e) {
+    Logger.log('Firestore event fetch error: ' + e.message);
+    return { eventName: '', totalLoads: 0 };
+  }
+}
+
 function getRecentActivity_() {
   try {
     var ss    = SpreadsheetApp.openById(SHEET_ID);
@@ -42,6 +74,7 @@ function getDashData() {
     g[st].push({ id: id, ts: Number(r[3] || 0) });
   });
   g.loaded.sort(function(a, b) { return b.ts - a.ts; });
+  var eventData = getFirestoreEventData_();
   return JSON.stringify({
     loaded:     g.loaded.map(function(t)     { return t.id; }),
     unloaded:   g.unloaded.map(function(t)   { return t.id; }),
@@ -49,9 +82,11 @@ function getDashData() {
     empty:      g.empty.map(function(t)      { return t.id; }),
     staged:     g.staged.map(function(t)     { return t.id; }),
     pending:    g.pending.map(function(t)    { return t.id; }),
-    total:    data.length,
-    at:       Date.now(),
-    activity: getRecentActivity_()
+    total:      data.length,
+    at:         Date.now(),
+    activity:   getRecentActivity_(),
+    eventName:  eventData.eventName,
+    totalLoads: eventData.totalLoads
   });
 }
 
@@ -72,9 +107,11 @@ function doGet(e) {
 
 function buildDashHtml_(sd, scriptUrl) {
   var REFRESH_MS = 480000;
-  var parsed   = JSON.parse(sd);
-  var total    = parsed.total;
-  var at       = new Date(parsed.at);
+  var parsed     = JSON.parse(sd);
+  var total      = parsed.total;
+  var eventName  = parsed.eventName  || '';
+  var totalLoads = parsed.totalLoads || 0;
+  var at         = new Date(parsed.at);
   var ath      = at.getHours() % 12 || 12;
   var atm      = at.getMinutes();
   var atap     = at.getHours() >= 12 ? 'PM' : 'AM';
@@ -291,7 +328,10 @@ function buildDashHtml_(sd, scriptUrl) {
     'body.kiosk .hdr-title{font-size:clamp(24px,5vw,36px);}' +
     'body.kiosk .hdr-sub{font-size:15px;}' +
     'body.kiosk .meta{font-size:15px;}' +
-    '@media(max-width:520px){.grid{grid-template-columns:1fr 1fr;}.hero-num{font-size:54px;}.card-num{font-size:36px;}.ticker-list{flex-direction:column;}}';
+    '@media(max-width:520px){.grid{grid-template-columns:1fr 1fr;}.hero-num{font-size:54px;}.card-num{font-size:36px;}.ticker-list{flex-direction:column;}}' +
+    '.event-badge{display:inline-block;font-size:11px;letter-spacing:.18em;color:var(--accent);border:1px solid rgba(64,196,255,.35);padding:2px 10px;margin-left:12px;vertical-align:middle;position:relative;top:-2px;}' +
+    '.loads-meta{font-size:13px;color:var(--dim);letter-spacing:.07em;white-space:nowrap;}' +
+    '.loads-meta .loads-num{color:var(--loaded);font-family:"Orbitron",monospace;font-size:15px;font-weight:700;}';
 
   var js = [
     'var REFRESH=' + REFRESH_MS + ';',
@@ -300,6 +340,8 @@ function buildDashHtml_(sd, scriptUrl) {
     'var CLRS={loaded:"#00e676",unloaded:"#ffd740",backloaded:"#ff9100",empty:"#ff4560",staged:"#448aff",pending:"#546e7a"};',
     'var ACTIVITY=' + actJson + ';',
     'var SCRIPT_URL="' + scriptUrl + '";',
+    'var EVENT_NAME="' + eventName.replace(/"/g, '\\"') + '";',
+    'var TOTAL_LOADS=' + totalLoads + ';',
     'var showIds=false,kiosk=false,t0=Date.now(),currentHero="loaded";',
     'window.setHero=function(st){',
       'var d=DATA[st],c=CLRS[st];',
@@ -421,6 +463,8 @@ function buildDashHtml_(sd, scriptUrl) {
           `document.querySelectorAll('.hsel-btn[data-st="'+k+'"]').forEach(function(b){b.textContent=(DATA[k]?DATA[k].lbl:k.toUpperCase())+" "+cnt;});` +
         '});' +
         'ACTIVITY=parsed.activity||[];' +
+        'if(parsed.eventName!==undefined){EVENT_NAME=parsed.eventName||"";}' +
+        'if(parsed.totalLoads!==undefined){TOTAL_LOADS=parsed.totalLoads||0;}' +
         't0=Date.now();' +
         'setHero(currentHero);' +
         'renderTicker();renderLastChange();updateAgoTimes();' +
@@ -428,6 +472,8 @@ function buildDashHtml_(sd, scriptUrl) {
         'var h=at.getHours()%12||12,m=at.getMinutes(),ap=at.getHours()>=12?"PM":"AM";' +
         'var syncEl=document.getElementById("synced-time");' +
         'if(syncEl)syncEl.textContent=h+":"+(m<10?"0"+m:m)+" "+ap;' +
+        'var evEl=document.getElementById("event-badge");if(evEl)evEl.textContent=EVENT_NAME;' +
+        'var ldEl=document.getElementById("loads-num");if(ldEl)ldEl.textContent=TOTAL_LOADS;' +
       '}catch(e){}' +
     '}',
     'setInterval(tick,1000);tick();',
@@ -451,7 +497,7 @@ function buildDashHtml_(sd, scriptUrl) {
         '<span class="cor bl"></span><span class="cor br"></span>' +
         '<div class="hdr-top">' +
           '<div>' +
-            '<div class="hdr-title">SAP SAPPHIRE 2026</div>' +
+            '<div class="hdr-title">SAP SAPPHIRE 2026' + (eventName ? '<span class="event-badge" id="event-badge">' + eventName + '</span>' : '<span class="event-badge" id="event-badge" style="display:none"></span>') + '</div>' +
             '<div class="hdr-sub">TRUCK OPERATIONS CENTER</div>' +
           '</div>' +
           '<button class="mode-btn" id="mode-btn" onclick="toggleKiosk()">☁ KIOSK</button>' +
@@ -461,6 +507,7 @@ function buildDashHtml_(sd, scriptUrl) {
           '<div class="meta">CLOCK <span id="clk">--:--:--</span></div>' +
           '<div class="meta">REFRESH <span id="cdown">8:00</span></div>' +
           '<div class="meta">SYNCED <span id="synced-time">' + updStr + '</span></div>' +
+          '<div class="loads-meta">LOADS <span class="loads-num" id="loads-num">' + totalLoads + '</span></div>' +
           lastHtml +
         '</div>' +
       '</div>' +
