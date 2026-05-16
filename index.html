@@ -5170,17 +5170,20 @@ function App() {
               const totalLoads = loadCountOffset + Object.values(loadCounts).reduce((a,b)=>a+b,0);
               const saveOffset = (val) => {
                 const n = parseInt(val, 10);
-                if (isNaN(n) || n < 0) { setEditingLoadTotal(false); return; }
-                setLoadCountOffset(n);
+                if (isNaN(n)) { setEditingLoadTotal(false); return; }
+                // offset = desired total − current sum, so display lands exactly on what user typed
+                const currentSum = Object.values(loadCounts).reduce((a,b)=>a+b,0);
+                const newOffset = n - currentSum;
+                setLoadCountOffset(newOffset);
                 setEditingLoadTotal(false);
-                db.collection('config').doc('event').update({ startAt: n })
+                db.collection('config').doc('event').update({ startAt: newOffset })
                   .catch(e => console.warn('[FS] startAt update failed:', e.message));
               };
               return (
                 <span style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:6,flexShrink:0}}>
                   <span style={{fontSize:11,color:'#90cfff',fontWeight:'bold',letterSpacing:'.02em'}}>{eventName}</span>
                   {editingLoadTotal
-                    ? <input autoFocus type="number" min="0" defaultValue={totalLoads}
+                    ? <input autoFocus type="number" defaultValue={totalLoads}
                         style={{width:70,padding:'2px 6px',fontSize:11,background:'#1a2a40',border:'1px solid #43A047',borderRadius:4,color:'#81c784',fontWeight:'bold'}}
                         onBlur={e=>saveOffset(e.target.value)}
                         onKeyDown={e=>{if(e.key==='Enter')saveOffset(e.target.value);if(e.key==='Escape')setEditingLoadTotal(false);}}/>
