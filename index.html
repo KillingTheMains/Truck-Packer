@@ -1505,6 +1505,25 @@ const writeBackupFile = async (dirHandle, trucks, truckLoaded, showName) => {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 function App() {
+  const [currentEventId, setCurrentEventId] = useState(() => {
+    try { return lsGet('truckPacker_eventId') || null; } catch(e) { return null; }
+  });
+
+  // ── Multi-event Firestore helper ──────────────────────────────────────────
+  const evtCol = (name) => db.collection('events').doc(currentEventId).collection(name);
+
+  // ── Splash screen state ────────────────────────────────────────────────────
+  const [splashEvents,       setSplashEvents]       = useState([]);
+  const [splashLoading,      setSplashLoading]      = useState(false);
+  const [currentShowId,      setCurrentShowId]      = useState(null); // from config/currentShow
+  const [newShowModal,       setNewShowModal]       = useState(false);
+  const [newShowName,        setNewShowName]        = useState('');
+  const [newShowSlug,        setNewShowSlug]        = useState('');
+  const [newShowCreating,    setNewShowCreating]    = useState(false);
+  const [migrateStatus,      setMigrateStatus]      = useState(''); // migration progress text
+  const [migrationExists,    setMigrationExists]    = useState(true); // true = sap-sapphire-26 exists already
+  const [setCurrentShowStatus, setSetCurrentShowStatus] = useState(''); // feedback text
+
   const [trucks,     setTrucks]     = useState(() => initTrucks());
   const [appLoaded,  setAppLoaded]  = useState(false);
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved'|'saving'|'unsaved'|'error'
@@ -1719,18 +1738,45 @@ function App() {
       .catch(e => console.warn('Auto-backup failed:', e.message));
   }, [truckLoaded, appLoaded]);
 
+  // ── Splash: load events list + currentShow on mount ─────────────────────
+  useEffect(() => {
+    const loadSplash = async () => {
+      setSplashLoading(true);
+      try {
+        const [eventsSnap, currentShowSnap, migSnap] = await Promise.all([
+          db.collection('events').orderBy('createdAt','desc').get(),
+          db.collection('config').doc('currentShow').get(),
+          db.collection('events').doc('sap-sapphire-26').get(),
+        ]);
+        const evs = [];
+        eventsSnap.forEach(doc => evs.push({ id: doc.id, ...doc.data() }));
+        setSplashEvents(evs);
+        if (currentShowSnap.exists) setCurrentShowId(currentShowSnap.data()?.eventId || null);
+        setMigrationExists(migSnap.exists);
+      } catch(e) { console.warn('[Splash] load failed:', e.message); }
+      setSplashLoading(false);
+    };
+    loadSplash();
+  }, []);
+
+  // ── Reset appLoaded when switching events ────────────────────────────────
+  useEffect(() => {
+    if (currentEventId) setAppLoaded(false);
+  }, [currentEventId]);
+
   // ── Load data from Firestore on startup ─────────────────────────────────
   useEffect(() => {
+    if (!currentEventId) return;
     const load = async () => {
       try {
         const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap, libSnap, eventSnap] = await Promise.all([
-          db.collection('layouts').get(),
-          db.collection('meta').get(),
-          db.collection('status').get(),
-          db.collection('logs').orderBy('ts','desc').limit(500).get(),
-          db.collection('cases').get(),
+          evtCol('layouts').get(),
+          evtCol('meta').get(),
+          evtCol('status').get(),
+          evtCol('logs').orderBy('ts','desc').limit(500).get(),
+          evtCol('cases').get(),
           db.collection('config').doc('library').get(),
-          db.collection('config').doc('event').get(),
+          evtCol('config').doc('event').get(),
         ]);
 
         // ── Truck layouts ────────────────────────────────────────────────
@@ -1762,7 +1808,7 @@ function App() {
               setTimeout(() => {
                 Object.entries(parsed).forEach(([id, t]) => {
                   if (Object.keys(t.placed || {}).length === 0) return;
-                  db.collection('layouts').doc(id).set({
+                  evtCol('layouts').doc(id).set({
                     placed: t.placed || {}, counter: t.counter || 1,
                     scans: (t.scans || []).slice(-50), info: t.info || emptyTruckInfo(id),
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -1794,7 +1840,7 @@ function App() {
               setTruckLoaded(parsed);
               setTimeout(() => {
                 Object.entries(parsed).forEach(([id, v]) => {
-                  db.collection('status').doc(id).set({
+                  evtCol('status').doc(id).set({
                     status: v.status || null, loadedAt: v.loadedAt || null,
                     statusAt: v.statusAt || v.loadedAt || null, notes: '',
                     updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -1842,7 +1888,7 @@ function App() {
           // First run — seed Firestore from DEFAULT_LIBRARY
           console.log('[FS] library empty — seeding from DEFAULT_LIBRARY');
           const seedItems = DEFAULT_LIBRARY.map(({hex, tc, ...rest}) => rest);
-          db.collection('config').doc('library').set({ items: seedItems })
+          db.collection('config').doc('library').set({ items: seedItems }) // global — no evtCol
             .catch(e => console.warn('[FS] library seed failed:', e.message));
         }
 
@@ -1857,7 +1903,7 @@ function App() {
         } else {
           // First run — seed default event
           console.log('[FS] no event doc — seeding Load Out');
-          db.collection('config').doc('event').set({ name: 'Load Out', startedAt: Date.now(), loadCounts: {} })
+          evtCol('config').doc('event').set({ name: 'Load Out', startedAt: Date.now(), loadCounts: {} })
             .catch(e => console.warn('[FS] event seed failed:', e.message));
         }
 
@@ -1881,7 +1927,7 @@ function App() {
       }
     };
     load();
-  }, []);
+  }, [currentEventId]);
 
   // ── Resize observer ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -1953,13 +1999,14 @@ function App() {
       try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
 
       // Write truck layouts to Firestore (only trucks with placed items)
+      if (!currentEventId) { setSaveStatus('saved'); return; }
       const packedTrucks = Object.entries(trucks).filter(([,t]) => Object.keys(t.placed||{}).length > 0);
       if (packedTrucks.length === 0) { setSaveStatus('saved'); return; }
       setSaveStatus('saving');
       try {
         const batch = db.batch();
         packedTrucks.forEach(([tid, t]) => {
-          batch.set(db.collection('layouts').doc(tid), {
+          batch.set(evtCol('layouts').doc(tid), {
             placed: t.placed || {},
             counter: t.counter || 1,
             scans: (t.scans||[]).slice(-50),
@@ -2001,7 +2048,7 @@ function App() {
           for (let i = 0; i < caseUpdates.length; i += 499) {
             const cb = db.batch();
             caseUpdates.slice(i, i + 499).forEach(({ caseId, docData }) =>
-              cb.set(db.collection('cases').doc(caseId), docData, { merge: true })
+              cb.set(evtCol('cases').doc(caseId), docData, { merge: true })
             );
             cb.commit().catch(e => console.warn('[FS] cases sync failed:', e.message));
           }
@@ -2036,6 +2083,7 @@ function App() {
   const [fsInboundTick, setFsInboundTick] = React.useState(0); // incremented on every snapshot to guarantee flag reset
   useEffect(() => {
     if (!appLoaded) return;
+    if (!currentEventId) return;
     const prev = prevTruckLoadedFSRef.current;
     prevTruckLoadedFSRef.current = truckLoaded;
     if (prev === null) return; // skip initial mount
@@ -2052,7 +2100,7 @@ function App() {
       // When leaving atdock, include dock:null so clearDock doesn't need a separate Firestore write.
       // A separate write produces a stale-status snapshot that briefly reverts the UI (flash).
       const wasAtDock = old?.status === 'atdock' && (cur?.status || null) !== 'atdock';
-      db.collection('status').doc(tid).set({
+      evtCol('status').doc(tid).set({
         status: cur?.status || null,
         loadedAt: cur?.loadedAt || null,
         statusAt: cur?.statusAt || null,
@@ -2067,6 +2115,7 @@ function App() {
   const prevNotesFSRef = useRef({});
   useEffect(() => {
     if (!appLoaded) return;
+    if (!currentEventId) return;
     if (fsInboundRef.current) return; // remote update — don't echo back to Firestore
     if (notesTimerRef.current) clearTimeout(notesTimerRef.current);
     notesTimerRef.current = setTimeout(() => {
@@ -2074,7 +2123,7 @@ function App() {
       const allIds = new Set([...Object.keys(truckNotes), ...Object.keys(prev)]);
       allIds.forEach(tid => {
         if ((truckNotes[tid]||'') === (prev[tid]||'')) return;
-        db.collection('status').doc(tid).set({
+        evtCol('status').doc(tid).set({
           notes: truckNotes[tid] || '',
           updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         }, { merge: true }).catch(e => console.warn('[FS] notes write failed:', tid, e.message));
@@ -2093,8 +2142,9 @@ function App() {
   }, [fsInboundTick]);
   useEffect(() => {
     if (!appLoaded) return;
+    if (!currentEventId) return;
     // status collection → truckLoaded + truckDock + truckNotes
-    const unsubStatus = db.collection('status').onSnapshot(snap => {
+    const unsubStatus = evtCol('status').onSnapshot(snap => {
       fsInboundRef.current = true;
       snap.docChanges().forEach(change => {
         const tid = change.doc.id;
@@ -2127,7 +2177,7 @@ function App() {
     }, err => console.warn('[FS] live status listener error:', err.message));
 
     // meta collection → truckMeta (trailer adds/removes/edits)
-    const unsubMeta = db.collection('meta').onSnapshot(snap => {
+    const unsubMeta = evtCol('meta').onSnapshot(snap => {
       snap.docChanges().forEach(change => {
         const tid = change.doc.id;
         if (change.type === 'removed') {
@@ -2142,7 +2192,7 @@ function App() {
       });
     }, err => console.warn('[FS] live meta listener error:', err.message));
 
-    // config/library → item library (syncs edits made on other clients)
+    // config/library → item library (syncs edits made on other clients) — global, no evtCol
     const unsubLib = db.collection('config').doc('library').onSnapshot(snap => {
       if (!snap.exists) return;
       const items = snap.data()?.items;
@@ -2151,7 +2201,7 @@ function App() {
     }, err => console.warn('[FS] live library listener error:', err.message));
 
     // config/event → event name + load counts (syncs across all clients)
-    const unsubEvent = db.collection('config').doc('event').onSnapshot(snap => {
+    const unsubEvent = evtCol('config').doc('event').onSnapshot(snap => {
       if (!snap.exists) return;
       const d = snap.data();
       if (d.name !== undefined) setEventName(d.name);
@@ -2161,7 +2211,7 @@ function App() {
     }, err => console.warn('[FS] live event listener error:', err.message));
 
     return () => { unsubStatus(); unsubMeta(); unsubLib(); unsubEvent(); };
-  }, [appLoaded]);
+  }, [appLoaded, currentEventId]);
 
   // ── Save immediately on page unload (catches refresh/close before 4s debounce fires) ─────
   useEffect(() => {
@@ -2801,7 +2851,7 @@ function App() {
       return next;
     });
     // Persist to Firestore so history survives across devices and refreshes
-    db.collection('logs').doc(entry.id).set({
+    if (currentEventId) evtCol('logs').doc(entry.id).set({
       ...entry,
       serverTs: firebase.firestore.FieldValue.serverTimestamp(),
     }).catch(e => console.warn('[FS] log write failed:', e.message));
@@ -2915,7 +2965,7 @@ function App() {
   // ── Event: increment load count when a truck is loaded ────────────────────
   const incrementLoadCount = (tid) => {
     setLoadCounts(prev => ({ ...prev, [tid]: (prev[tid] || 0) + 1 }));
-    db.collection('config').doc('event').update({
+    evtCol('config').doc('event').update({
       [`loadCounts.${tid}`]: firebase.firestore.FieldValue.increment(1)
     }).catch(e => console.warn('[FS] incrementLoadCount failed:', tid, e.message));
   };
@@ -2927,7 +2977,7 @@ function App() {
     setEventStartedAt(now);
     setLoadCounts({});
     setLoadCountOffset(0);
-    db.collection('config').doc('event').set({ name, startedAt: now, loadCounts: {}, startAt: 0 })
+    evtCol('config').doc('event').set({ name, startedAt: now, loadCounts: {}, startAt: 0 })
       .catch(e => console.warn('[FS] startNewEvent failed:', e.message));
     setNewEventModal(false);
     setNewEventNameInput('');
@@ -2967,7 +3017,7 @@ function App() {
         return next;
       });
       pickupSet.forEach(tid => {
-        db.collection('status').doc(tid).set(
+        evtCol('status').doc(tid).set(
           { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         ).catch(e => console.warn('[FS] dock write failed:', tid, e.message));
@@ -2991,7 +3041,7 @@ function App() {
       return next;
     });
     pickupSet.forEach(tid => {
-      db.collection('status').doc(tid).set(
+      evtCol('status').doc(tid).set(
         { status: chosenStatus, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       ).catch(e => console.warn('[FS] status write failed:', tid, e.message));
@@ -3011,7 +3061,7 @@ function App() {
       return;
     }
     setTruckDock(prev => ({ ...prev, [tid]: dock }));
-    db.collection('status').doc(tid).set(
+    evtCol('status').doc(tid).set(
       { dock, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     ).catch(e => console.warn('[FS] dock save failed:', tid, e.message));
@@ -3023,7 +3073,7 @@ function App() {
     setTruckDock(prev => { const n = { ...prev }; delete n[tid]; return n; });
     if (skipFsWrite) return; // caller (e.g. status change write effect) will write dock:null itself
     const curStatus = truckLoaded[tid];
-    db.collection('status').doc(tid).set(
+    evtCol('status').doc(tid).set(
       { dock: null, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
         ...(curStatus?.status ? { status: curStatus.status, statusAt: curStatus.statusAt||null } : {}) },
       { merge: true }
@@ -3047,7 +3097,7 @@ function App() {
       if (!t[tid]) return t;
       return { ...t, [tid]: { ...t[tid], info: { ...(t[tid].info||emptyTruckInfo(tid)), [colKey]: value } } };
     });
-    db.collection('meta').doc(tid).set({ [colKey]: value }, { merge: true })
+    evtCol('meta').doc(tid).set({ [colKey]: value }, { merge: true })
       .catch(e => console.warn('[FS] meta write failed:', tid, e.message));
   };
 
@@ -3058,7 +3108,7 @@ function App() {
     const num = Object.keys(truckMeta).length + 1;
     setTruckMeta(prev => ({ ...prev, [id]: { num } }));
     setTrucks(prev => ({ ...prev, [id]: { info: emptyTruckInfo(id), placed: {}, history: [], counter: 1, scans: [] } }));
-    db.collection('meta').doc(id).set({ num, createdAt: firebase.firestore.FieldValue.serverTimestamp() })
+    evtCol('meta').doc(id).set({ num, createdAt: firebase.firestore.FieldValue.serverTimestamp() })
       .catch(e => console.warn('[FS] add trailer meta failed:', id, e.message));
     setTlAddOpen(false);
     setTlAddId('');
@@ -3071,9 +3121,9 @@ function App() {
     setTruckLoaded(prev=> { const n={...prev};  delete n[tid]; return n; });
     setTruckDock(prev  => { const n={...prev};  delete n[tid]; return n; });
     setTruckNotes(prev => { const n={...prev};  delete n[tid]; return n; });
-    db.collection('meta').doc(tid).delete()   .catch(e=>console.warn('[FS] del meta:',e.message));
-    db.collection('status').doc(tid).delete() .catch(e=>console.warn('[FS] del status:',e.message));
-    db.collection('layouts').doc(tid).delete().catch(e=>console.warn('[FS] del layout:',e.message));
+    evtCol('meta').doc(tid).delete()   .catch(e=>console.warn('[FS] del meta:',e.message));
+    evtCol('status').doc(tid).delete() .catch(e=>console.warn('[FS] del status:',e.message));
+    evtCol('layouts').doc(tid).delete().catch(e=>console.warn('[FS] del layout:',e.message));
   };
 
   const clearAllLayouts = () => {
@@ -3090,7 +3140,7 @@ function App() {
       return next;
     });
     const batch = db.batch();
-    packed.forEach(([id]) => batch.delete(db.collection('layouts').doc(id)));
+    packed.forEach(([id]) => batch.delete(evtCol('layouts').doc(id)));
     batch.commit().catch(e => console.warn('[FS] clearAll layouts failed:', e.message));
     addHistoryEntry('STATUS', null, null, `ALL TRUCK LAYOUTS CLEARED (${packed.length} truck${packed.length!==1?'s':''})`);
   };
@@ -3102,7 +3152,7 @@ function App() {
     setCaseLookupData(null);
     setCaseReassignTruck('');
     try {
-      const doc = await db.collection('cases').doc(caseId).get();
+      const doc = await evtCol('cases').doc(caseId).get();
       if (!doc.exists) {
         setCaseLookupData({ notFound: true, caseId });
       } else {
@@ -3121,7 +3171,7 @@ function App() {
     const nowMs = Date.now();
     const prev  = caseAssignmentsRef.current[caseId] || {};
     const newHistory = [...(prev.truckHistory || []), { truckId: truck, assignedAt: nowMs, source: 'manual' }];
-    await db.collection('cases').doc(caseId).set({
+    await evtCol('cases').doc(caseId).set({
       currentTruck: truck, truckHistory: newHistory,
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
     }, { merge: true }).catch(e => console.warn('[FS] reassign failed:', e.message));
@@ -3340,6 +3390,200 @@ function App() {
   const curH = cur ? (selRotated?cur.w:cur.h) : 0;
   const rulerTicks = Array.from({length:Math.ceil(TW_FT/2)+1},(_,i)=>i*2).filter(f=>f<=TW_FT);
 
+  // ── Splash screen helper: generate slug from name ────────────────────────
+  const toSlug = (s) => s.toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+
+  // ── Splash screen: show when no event selected ───────────────────────────
+  if (!currentEventId) {
+    const openEvent = (slug) => {
+      setCurrentEventId(slug);
+      try { lsSet('truckPacker_eventId', slug); } catch(e) {}
+    };
+
+    const createNewShow = async () => {
+      const name = newShowName.trim();
+      const slug = newShowSlug.trim();
+      if (!name || !slug) return;
+      setNewShowCreating(true);
+      try {
+        await db.collection('events').doc(slug).set({
+          name, slug, createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        await db.collection('events').doc(slug).collection('config').doc('event').set({
+          name, startedAt: Date.now(), loadCounts: {}, startAt: 0
+        });
+        setNewShowModal(false);
+        setNewShowName('');
+        setNewShowSlug('');
+        openEvent(slug);
+      } catch(e) {
+        alert('Failed to create show: ' + e.message);
+      }
+      setNewShowCreating(false);
+    };
+
+    const migrateToEvent = async () => {
+      if (!window.confirm('Migrate root-level data into events/sap-sapphire-26?\n\nThis copies layouts, meta, status, logs, cases, and config/event. Existing data is NOT deleted.')) return;
+      setMigrateStatus('Starting migration…');
+      try {
+        // Create event doc
+        await db.collection('events').doc('sap-sapphire-26').set({
+          name: 'SAP Sapphire 2026', slug: 'sap-sapphire-26',
+          createdAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        const colsToCopy = ['layouts','meta','status','cases'];
+        for (const col of colsToCopy) {
+          setMigrateStatus(`Copying ${col}…`);
+          const snap = await db.collection(col).get();
+          if (snap.empty) { setMigrateStatus(`${col}: empty, skipping`); continue; }
+          const docs = [];
+          snap.forEach(d => docs.push({ id: d.id, data: d.data() }));
+          for (let i = 0; i < docs.length; i += 499) {
+            const batch = db.batch();
+            docs.slice(i, i + 499).forEach(({ id, data }) => {
+              batch.set(db.collection('events').doc('sap-sapphire-26').collection(col).doc(id), data);
+            });
+            await batch.commit();
+          }
+          setMigrateStatus(`Copied ${docs.length} ${col} docs`);
+        }
+        // Copy logs
+        setMigrateStatus('Copying logs…');
+        const logsSnap = await db.collection('logs').orderBy('ts','desc').limit(500).get();
+        if (!logsSnap.empty) {
+          const logDocs = [];
+          logsSnap.forEach(d => logDocs.push({ id: d.id, data: d.data() }));
+          for (let i = 0; i < logDocs.length; i += 499) {
+            const batch = db.batch();
+            logDocs.slice(i, i + 499).forEach(({ id, data }) => {
+              batch.set(db.collection('events').doc('sap-sapphire-26').collection('logs').doc(id), data);
+            });
+            await batch.commit();
+          }
+          setMigrateStatus(`Copied ${logDocs.length} log entries`);
+        }
+        // Copy config/event
+        setMigrateStatus('Copying config/event…');
+        const evSnap = await db.collection('config').doc('event').get();
+        if (evSnap.exists) {
+          await db.collection('events').doc('sap-sapphire-26').collection('config').doc('event').set(evSnap.data());
+        }
+        setMigrateStatus('Migration complete!');
+        setMigrationExists(true);
+        setSplashEvents(prev => {
+          if (prev.find(e => e.id === 'sap-sapphire-26')) return prev;
+          return [{ id: 'sap-sapphire-26', name: 'SAP Sapphire 2026', slug: 'sap-sapphire-26' }, ...prev];
+        });
+        setTimeout(() => { openEvent('sap-sapphire-26'); }, 1000);
+      } catch(e) {
+        setMigrateStatus('Migration failed: ' + e.message);
+      }
+    };
+
+    return (
+      <div style={{position:'fixed',inset:0,background:'#020810',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',fontFamily:'monospace',color:'#90A4AE',overflow:'auto',padding:'20px 0'}}>
+        <div style={{maxWidth:680,width:'100%',padding:'0 20px'}}>
+          {/* Title */}
+          <div style={{textAlign:'center',marginBottom:36}}>
+            <div style={{fontSize:42,fontWeight:'bold',color:'#fff',letterSpacing:'.08em',marginBottom:6}}>🚛 TRUCK PACKER</div>
+            <div style={{fontSize:12,color:'#3a6080',letterSpacing:'.12em'}}>MULTI-EVENT LOGISTICS SYSTEM</div>
+          </div>
+
+          {/* Shows list */}
+          <div style={{background:'#0a1828',border:'1px solid #1a3050',borderRadius:8,marginBottom:20}}>
+            <div style={{padding:'12px 16px',borderBottom:'1px solid #1a3050',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{fontSize:11,fontWeight:'bold',letterSpacing:'.1em',color:'#90A4AE',flex:1}}>SHOWS</span>
+              <button
+                onClick={()=>{ setNewShowModal(true); setNewShowName(''); setNewShowSlug(''); }}
+                style={{padding:'5px 12px',background:'#1a3050',border:'1px solid #2a5a8a',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer',letterSpacing:'.04em'}}
+              >＋ NEW SHOW</button>
+            </div>
+            {splashLoading && <div style={{padding:'24px',textAlign:'center',color:'#2a4a5a',fontSize:11}}>Loading shows…</div>}
+            {!splashLoading && splashEvents.length === 0 && (
+              <div style={{padding:'24px',textAlign:'center',color:'#2a4a5a',fontSize:11}}>No shows yet. Create one above.</div>
+            )}
+            {splashEvents.map(ev => (
+              <div key={ev.id} style={{display:'flex',alignItems:'center',gap:10,padding:'12px 16px',borderBottom:'1px solid #0d1e30'}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:'bold',color:'#cde',marginBottom:2}}>{ev.name || ev.id}</div>
+                  <div style={{fontSize:10,color:'#2a4a6a',fontFamily:'monospace'}}>{ev.id}{currentShowId===ev.id ? <span style={{color:'#43A047',marginLeft:8,fontWeight:'bold'}}>● LIVE</span> : ''}</div>
+                </div>
+                <button
+                  onClick={()=>openEvent(ev.id)}
+                  style={{padding:'6px 14px',background:'#1F3864',border:'1px solid #2a6aaa',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer',whiteSpace:'nowrap'}}
+                >OPEN</button>
+              </div>
+            ))}
+          </div>
+
+          {/* Migration button */}
+          {!migrationExists && (
+            <div style={{background:'#0a1828',border:'1px solid #3a2a10',borderRadius:8,marginBottom:20,padding:'16px'}}>
+              <div style={{fontSize:11,color:'#FF6D00',fontWeight:'bold',marginBottom:8,letterSpacing:'.06em'}}>DATA MIGRATION</div>
+              <div style={{fontSize:11,color:'#5a4a30',marginBottom:12}}>Copy existing root-level data into the events/sap-sapphire-26 namespace.</div>
+              {migrateStatus && <div style={{fontSize:11,color:'#7ab4cc',marginBottom:10,fontFamily:'monospace'}}>{migrateStatus}</div>}
+              <button
+                onClick={migrateToEvent}
+                style={{padding:'7px 16px',background:'#2a1800',border:'1px solid #FF6D00',borderRadius:4,color:'#FF6D00',fontSize:11,fontWeight:'bold',cursor:'pointer'}}
+              >🔄 MIGRATE SAP SAPPHIRE 26</button>
+            </div>
+          )}
+          {migrateStatus && migrationExists && (
+            <div style={{background:'#0a1828',border:'1px solid #1a3050',borderRadius:8,marginBottom:20,padding:'12px 16px'}}>
+              <div style={{fontSize:11,color:'#7ab4cc',fontFamily:'monospace'}}>{migrateStatus}</div>
+            </div>
+          )}
+
+          {/* Public portal link */}
+          <div style={{textAlign:'center',marginTop:8}}>
+            <a href="https://script.google.com/macros/s/AKfycbz-K_UtMZpW5jVh4Ztdx71ul0a5T8ko62KSV6EEsW1avidYRdGaDFOzFLts4JXFBaBXDQ/exec"
+              target="_blank" rel="noopener noreferrer"
+              style={{color:'#3a6080',fontSize:11,textDecoration:'none',letterSpacing:'.06em'}}>
+              🌐 Public Portal
+            </a>
+          </div>
+        </div>
+
+        {/* New Show Modal */}
+        {newShowModal && (
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:200}}>
+            <div style={{background:'#0d1e33',border:'1px solid #1a3a5a',borderRadius:8,padding:24,width:400,maxWidth:'95vw'}}>
+              <div style={{fontSize:13,fontWeight:'bold',color:'#90A4AE',marginBottom:16,letterSpacing:'.06em'}}>NEW SHOW</div>
+              <div style={{marginBottom:12}}>
+                <div style={{fontSize:10,color:'#445',textTransform:'uppercase',marginBottom:4}}>Show Name</div>
+                <input
+                  autoFocus
+                  value={newShowName}
+                  onChange={e=>{ setNewShowName(e.target.value); setNewShowSlug(toSlug(e.target.value)); }}
+                  placeholder="e.g. NAB 2027"
+                  style={{width:'100%',background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#ccc',fontSize:13,padding:'7px 10px',outline:'none',boxSizing:'border-box'}}
+                  onKeyDown={e=>{ if(e.key==='Enter') createNewShow(); if(e.key==='Escape') setNewShowModal(false); }}
+                />
+              </div>
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:10,color:'#445',textTransform:'uppercase',marginBottom:4}}>Event ID (slug)</div>
+                <input
+                  value={newShowSlug}
+                  onChange={e=>setNewShowSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g,''))}
+                  placeholder="e.g. nab-2027"
+                  style={{width:'100%',background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#7cf',fontSize:12,padding:'7px 10px',outline:'none',boxSizing:'border-box',fontFamily:'monospace'}}
+                />
+              </div>
+              <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+                <button onClick={()=>setNewShowModal(false)} style={{padding:'6px 14px',background:'transparent',border:'1px solid #2a3a5a',borderRadius:4,color:'#778',fontSize:11,cursor:'pointer'}}>CANCEL</button>
+                <button
+                  onClick={createNewShow}
+                  disabled={!newShowName.trim()||!newShowSlug.trim()||newShowCreating}
+                  style={{padding:'6px 14px',background:'#1F3864',border:'1px solid #2a6aaa',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer'}}
+                >{newShowCreating ? 'CREATING…' : 'CREATE SHOW'}</button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (<>
     {/* ── Loading overlay (shown until Apps Script data loads) ── */}
     {!appLoaded && (
@@ -3398,6 +3642,34 @@ function App() {
           </div>
         )}
       </div>
+      <div className="tb-sep"/>
+      {/* ── Back to Shows ── */}
+      <button
+        onClick={()=>{ setCurrentEventId(null); try{lsSet('truckPacker_eventId','');}catch(e){} }}
+        style={{padding:'3px 9px',background:'#0a1525',border:'1px solid #1a3050',borderRadius:4,color:'#5a8aaa',fontSize:11,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'monospace'}}
+        title="Return to shows list"
+      >← Shows</button>
+      <div className="tb-sep"/>
+      {/* ── Set as Current Show ── */}
+      <button
+        onClick={async ()=>{
+          try {
+            await db.collection('config').doc('currentShow').set({ eventId: currentEventId });
+            setCurrentShowId(currentEventId);
+            setSetCurrentShowStatus('Set!');
+            setTimeout(()=>setSetCurrentShowStatus(''),2000);
+          } catch(e) { setSetCurrentShowStatus('Error'); }
+        }}
+        style={{
+          padding:'3px 9px',
+          background: currentShowId===currentEventId ? 'rgba(67,160,71,.18)' : '#0a1525',
+          border: `1px solid ${currentShowId===currentEventId ? 'rgba(67,160,71,.5)' : '#1a3050'}`,
+          borderRadius:4,
+          color: currentShowId===currentEventId ? '#81c784' : '#5a8aaa',
+          fontSize:10,cursor:'pointer',whiteSpace:'nowrap',fontFamily:'monospace',fontWeight:'bold',
+        }}
+        title="Set this show as the live public dashboard feed"
+      >{setCurrentShowStatus || (currentShowId===currentEventId ? '📡 LIVE' : '📡 SET LIVE')}</button>
       <div className="tb-sep"/>
       <div className="truck-nav">
         <button className="nav-btn" disabled={truckIdx<=0} onClick={()=>switchTruck(sortedTruckIds[truckIdx-1])}>◀</button>
@@ -5194,7 +5466,7 @@ function App() {
                 const newOffset = n - currentSum;
                 setLoadCountOffset(newOffset);
                 setEditingLoadTotal(false);
-                db.collection('config').doc('event').update({ startAt: newOffset })
+                evtCol('config').doc('event').update({ startAt: newOffset })
                   .catch(e => console.warn('[FS] startAt update failed:', e.message));
               };
               return (
