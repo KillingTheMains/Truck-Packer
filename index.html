@@ -2057,6 +2057,15 @@ function App() {
     });
   }, [truckLoaded, appLoaded]);
 
+  // ── Reset fsInboundRef after every snapshot, even when no truck data changed ─
+  // The write effect above resets the flag when truckLoaded actually changes.
+  // But if snapshot data == current state, setTruckLoaded returns prev (no re-render),
+  // the write effect never runs, and fsInboundRef stays true — blocking all local writes.
+  // This effect fires on every snapshot tick regardless, guaranteeing the flag is cleared.
+  useEffect(() => {
+    if (fsInboundTick > 0) fsInboundRef.current = false;
+  }, [fsInboundTick]);
+
   // ── Debounced notes sync to Firestore (1s) ──────────────────────────────────
   const notesTimerRef = useRef(null);
   const prevNotesFSRef = useRef({});
@@ -2080,6 +2089,7 @@ function App() {
 
   // ── Real-time Firestore listeners — multi-user live sync ────────────────────
   const [liveLastSync, setLiveLastSync] = React.useState(null);
+  const [fsInboundTick, setFsInboundTick] = React.useState(0); // incremented on every snapshot to guarantee flag reset
   useEffect(() => {
     if (!appLoaded) return;
     // status collection → truckLoaded + truckDock + truckNotes
@@ -2111,9 +2121,8 @@ function App() {
           return { ...prev, [tid]: note };
         });
       });
+      setFsInboundTick(c => c + 1); // guarantees a re-render even if no truck data changed, so the reset effect always fires
       setLiveLastSync(Date.now());
-      // Reset flag after React effects run (effects run before setTimeout(0))
-      // Note: fsInboundRef is reset in the truckLoaded write effect after it runs, not here
     }, err => console.warn('[FS] live status listener error:', err.message));
 
     // meta collection → truckMeta (trailer adds/removes/edits)
