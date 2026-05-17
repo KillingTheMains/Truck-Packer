@@ -3449,19 +3449,22 @@ function App() {
       try {
         const subcols = ['layouts','meta','status','logs','cases','config'];
         for (const col of subcols) {
-          const snap = await db.collection('events').doc(slug).collection(col).get();
-          if (!snap.empty) {
+          // Delete in chunks of 400 to stay under Firestore's 500-op batch limit
+          let snap = await db.collection('events').doc(slug).collection(col).limit(400).get();
+          while (!snap.empty) {
             const batch = db.batch();
             snap.forEach(doc => batch.delete(doc.ref));
             await batch.commit();
+            snap = await db.collection('events').doc(slug).collection(col).limit(400).get();
           }
         }
         await db.collection('events').doc(slug).delete();
         setSplashEvents(prev => prev.filter(e => e.id !== slug));
+        setDeleteShowId(null);
       } catch(e) {
         console.warn('[delete show] error:', e.message);
+        alert('Delete failed: ' + e.message);
       }
-      setDeleteShowId(null);
       setDeleteShowBusy(false);
     };
 
