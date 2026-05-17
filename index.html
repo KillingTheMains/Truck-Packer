@@ -2049,11 +2049,15 @@ function App() {
       if (cur?.status === 'loaded' && old?.status !== 'loaded') {
         incrementLoadCount(tid);
       }
+      // When leaving atdock, include dock:null so clearDock doesn't need a separate Firestore write.
+      // A separate write produces a stale-status snapshot that briefly reverts the UI (flash).
+      const wasAtDock = old?.status === 'atdock' && (cur?.status || null) !== 'atdock';
       db.collection('status').doc(tid).set({
         status: cur?.status || null,
         loadedAt: cur?.loadedAt || null,
         statusAt: cur?.statusAt || null,
         updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        ...(wasAtDock ? { dock: null } : {}),
       }, { merge: true }).catch(e => console.warn('[FS] status write failed:', tid, e.message));
     });
   }, [truckLoaded, appLoaded]);
@@ -3014,11 +3018,10 @@ function App() {
     addHistoryEntry('DOCK', tid, null, `${tid} → DOCK ${dock}`);
   };
 
-  const clearDock = (tid) => {
+  const clearDock = (tid, skipFsWrite = false) => {
     addHistoryEntry('DOCK', tid, null, `${tid} → DOCK CLEARED`);
     setTruckDock(prev => { const n = { ...prev }; delete n[tid]; return n; });
-    // Include current status in the write so the resulting snapshot doesn't carry stale status data
-    // (prevents the snapshot from reverting a status change that hasn't been flushed to Firestore yet)
+    if (skipFsWrite) return; // caller (e.g. status change write effect) will write dock:null itself
     const curStatus = truckLoaded[tid];
     db.collection('status').doc(tid).set(
       { dock: null, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -4578,7 +4581,7 @@ function App() {
                       return next;
                     });
                     dispatchStatusTrucks.forEach(tid=>{
-                      clearDock(tid);
+                      clearDock(tid, true); // skipFsWrite: write effect will include dock:null
                       addHistoryEntry('STATUS',tid,s,`${tid} → ${s.toUpperCase()} (post-dispatch)`);
                     });
                     setDispatchStatusModal(false);
@@ -5331,7 +5334,8 @@ function App() {
                                     return {...prev,[tid]:{status:next,loadedAt:Date.now(),statusAt:Date.now()}};
                                   });
                                   // Leaving At Dock → clear dock assignment automatically
-                                  if(prevStatus==='atdock' && next!=='atdock') clearDock(tid);
+                                  // skipFsWrite=true: the write effect will include dock:null in its write, avoiding a conflicting snapshot
+                                  if(prevStatus==='atdock' && next!=='atdock') clearDock(tid, true);
                                   // Arriving At Dock manually → ask for dock number if not already set
                                   if(next==='atdock' && !truckDock[tid]) {
                                     const d = window.prompt(`Dock number for ${tid}?`);
