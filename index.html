@@ -1526,7 +1526,7 @@ function App() {
   const [deleteShowId,       setDeleteShowId]       = useState(null); // id being confirmed for deletion
   const [deleteShowBusy,     setDeleteShowBusy]     = useState(false);
 
-  const [trucks,     setTrucks]     = useState(() => initTrucks());
+  const [trucks,     setTrucks]     = useState({});
   const [appLoaded,  setAppLoaded]  = useState(false);
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved'|'saving'|'unsaved'|'error'
   const saveTimerRef = useRef(null);
@@ -1785,21 +1785,21 @@ function App() {
         setTruckNotes({});
         setTruckDock({});
         setTruckMeta({});
-        setHistory([]);
+        setActivityLog([]);
         setCases({});
         setEventName('');
 
         // ── Truck layouts ────────────────────────────────────────────────
         if (!layoutsSnap.empty) {
-          const base = initTrucks();
+          const base = {};
           layoutsSnap.forEach(doc => {
             const d = doc.data();
             base[doc.id] = {
-              ...(base[doc.id] || { info: emptyTruckInfo(doc.id), placed: {}, history: [], counter: 1, scans: [] }),
+              info: d.info || emptyTruckInfo(doc.id),
               placed: d.placed || {},
               counter: d.counter || 1,
               scans: d.scans || [],
-              info: d.info || base[doc.id]?.info || emptyTruckInfo(doc.id),
+              history: [],
             };
           });
           setTrucks(base);
@@ -1934,8 +1934,6 @@ function App() {
           const savedTrucks = lsGet('truckPacker_trucks');
           if (savedTrucks) {
             const parsed = JSON.parse(savedTrucks);
-            const base = initTrucks();
-            Object.keys(base).forEach(id => { if (!parsed[id]) parsed[id] = base[id]; });
             Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
             setTrucks(parsed);
           }
@@ -2287,7 +2285,7 @@ function App() {
   const truckIdx = sortedTruckIds.indexOf(effectiveCurId);
 
   const updTruck = useCallback((id, fn) =>
-    setTrucks(t => ({ ...t, [id]: fn(t[id]) })), []);
+    setTrucks(t => ({ ...t, [id]: fn(t[id] || { placed:{}, info:emptyTruckInfo(id), history:[], counter:1, scans:[] }) })), []);
 
   const switchTruck = (id) => {
     setSelIdx(null); setSelPId(null); setHover(null); setDragId(null); setCurId(id); lsSet('truckPacker_curId', id);
