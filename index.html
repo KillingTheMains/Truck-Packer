@@ -1619,9 +1619,7 @@ function App() {
   const [truckMeta,        setTruckMeta]        = useState({}); // {truckId: {num,trailerNum,doorType,length,contents}}
   const truckListHeaders = ['#', 'ID', 'TRAILER ID', 'DOOR TYPE', 'LENGTH', 'CONTENTS'];
   const truckListRows = React.useMemo(() => {
-    const ids = Object.keys(truckMeta).length > 0
-      ? Object.keys(truckMeta).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'}))
-      : TRUCK_IDS;
+    const ids = Object.keys(truckMeta).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:'base'}));
     return ids.map((id, idx) => {
       const m = truckMeta[id] || {};
       return [String(m.num ?? idx + 1), id, m.trailerNum || '', m.doorType || '', m.length || '', m.contents || ''];
@@ -1782,7 +1780,7 @@ function App() {
         ]);
 
         // ── Clear stale state from previous show before populating ───────
-        setTrucks(initTrucks());
+        setTrucks({});
         setTruckLoaded({});
         setTruckNotes({});
         setTruckDock({});
@@ -2282,10 +2280,11 @@ function App() {
     };
   }, [dragId, curId]);
 
-  const truck = trucks[curId];
-  const { placed, info, history } = truck;
   const sortedTruckIds = Object.keys(trucks).sort((a,b)=>{ const p=s=>{const m=s.match(/^([A-Za-z]*)(\d+)$/);return m?[m[1].toUpperCase(),parseInt(m[2],10)]:[s,0];}; const[aL,aN]=p(a),[bL,bN]=p(b);return aL!==bL?aL.localeCompare(bL):aN-bN; });
-  const truckIdx = sortedTruckIds.indexOf(curId);
+  const effectiveCurId = trucks[curId] ? curId : (sortedTruckIds[0] || null);
+  const truck = effectiveCurId ? trucks[effectiveCurId] : { placed:{}, info:emptyTruckInfo(''), history:[] };
+  const { placed, info, history } = truck;
+  const truckIdx = sortedTruckIds.indexOf(effectiveCurId);
 
   const updTruck = useCallback((id, fn) =>
     setTrucks(t => ({ ...t, [id]: fn(t[id]) })), []);
@@ -3745,8 +3744,10 @@ function App() {
       <div className="tb-sep"/>
       <div className="truck-nav">
         <button className="nav-btn" disabled={truckIdx<=0} onClick={()=>switchTruck(sortedTruckIds[truckIdx-1])}>◀</button>
-        <select value={curId} onChange={e=>switchTruck(e.target.value)}>
-          {sortedTruckIds.map(t=><option key={t} value={t}>{t}{trucks[t]&&Object.keys(trucks[t].placed).length>0?' ✓':''}</option>)}
+        <select value={effectiveCurId||''} onChange={e=>switchTruck(e.target.value)} disabled={sortedTruckIds.length===0}>
+          {sortedTruckIds.length===0
+            ? <option value=''>— no trucks —</option>
+            : sortedTruckIds.map(t=><option key={t} value={t}>{t}{trucks[t]&&Object.keys(trucks[t].placed).length>0?' ✓':''}</option>)}
         </select>
         <button className="nav-btn" disabled={truckIdx>=sortedTruckIds.length-1} onClick={()=>switchTruck(sortedTruckIds[truckIdx+1])}>▶</button>
       </div>
@@ -3902,9 +3903,16 @@ function App() {
       </div>
 
       <div className="content-area" ref={canvasRef}>
+      {sortedTruckIds.length === 0 ? (
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:12,color:'#2a4a6a'}}>
+          <div style={{fontSize:32}}>🚚</div>
+          <div style={{fontSize:14,fontWeight:'bold',color:'#3a6a8a'}}>No trucks yet</div>
+          <div style={{fontSize:11,color:'#2a4a6a'}}>Go to <strong style={{color:'#4a8aaa'}}>Truck List</strong> to add trucks to this show</div>
+        </div>
+      ) : (
       <div className="canvas-wrap">
         <div className="canvas-label">
-          {curId} — 53' × 8'6" real-scale · 2" snap
+          {effectiveCurId} — 53' × 8'6" real-scale · 2" snap
           {problemIds.size>0 && <span style={{color:'#ff5555',marginLeft:10,fontWeight:'normal'}}>⚠ {overlappingIds.size>0?`${overlappingIds.size} overlapping`:''}{overlappingIds.size>0&&outOfBoundsIds.size>0?' · ':''}{outOfBoundsIds.size>0?`${outOfBoundsIds.size} out-of-bounds`:''}</span>}
         </div>
 
@@ -4109,6 +4117,7 @@ function App() {
           </div>
         </div>
       </div>
+      )}
 
       {/* ── BOTTOM PANEL ── */}
       <div className="bottom-panel">
