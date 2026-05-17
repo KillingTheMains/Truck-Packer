@@ -1523,6 +1523,8 @@ function App() {
   const [migrateStatus,      setMigrateStatus]      = useState(''); // migration progress text
   const [migrationExists,    setMigrationExists]    = useState(true); // true = sap-sapphire-26 exists already
   const [setCurrentShowStatus, setSetCurrentShowStatus] = useState(''); // feedback text
+  const [deleteShowId,       setDeleteShowId]       = useState(null); // id being confirmed for deletion
+  const [deleteShowBusy,     setDeleteShowBusy]     = useState(false);
 
   const [trucks,     setTrucks]     = useState(() => initTrucks());
   const [appLoaded,  setAppLoaded]  = useState(false);
@@ -3442,6 +3444,27 @@ function App() {
       setNewShowCreating(false);
     };
 
+    const deleteShow = async (slug) => {
+      setDeleteShowBusy(true);
+      try {
+        const subcols = ['layouts','meta','status','logs','cases','config'];
+        for (const col of subcols) {
+          const snap = await db.collection('events').doc(slug).collection(col).get();
+          if (!snap.empty) {
+            const batch = db.batch();
+            snap.forEach(doc => batch.delete(doc.ref));
+            await batch.commit();
+          }
+        }
+        await db.collection('events').doc(slug).delete();
+        setSplashEvents(prev => prev.filter(e => e.id !== slug));
+      } catch(e) {
+        console.warn('[delete show] error:', e.message);
+      }
+      setDeleteShowId(null);
+      setDeleteShowBusy(false);
+    };
+
     const migrateToEvent = async () => {
       if (!window.confirm('Migrate root-level data into events/sap-sapphire-26?\n\nThis copies layouts, meta, status, logs, cases, and config/event. Existing data is NOT deleted.')) return;
       setMigrateStatus('Starting migration…');
@@ -3528,10 +3551,32 @@ function App() {
                   <div style={{fontSize:14,fontWeight:'bold',color:'#cde',marginBottom:2}}>{ev.name || ev.id}</div>
                   <div style={{fontSize:10,color:'#2a4a6a',fontFamily:'monospace'}}>{ev.id}{currentShowId===ev.id ? <span style={{color:'#43A047',marginLeft:8,fontWeight:'bold'}}>● LIVE</span> : ''}</div>
                 </div>
-                <button
-                  onClick={()=>openEvent(ev.id)}
-                  style={{padding:'6px 14px',background:'#1F3864',border:'1px solid #2a6aaa',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer',whiteSpace:'nowrap'}}
-                >OPEN</button>
+                {deleteShowId === ev.id ? (
+                  <div style={{display:'flex',alignItems:'center',gap:6}}>
+                    <span style={{fontSize:10,color:'#e57373',whiteSpace:'nowrap'}}>Delete?</span>
+                    <button
+                      onClick={()=>deleteShow(ev.id)}
+                      disabled={deleteShowBusy}
+                      style={{padding:'4px 10px',background:'#3a0a0a',border:'1px solid #c62828',borderRadius:4,color:'#ef9a9a',fontSize:11,fontWeight:'bold',cursor:'pointer'}}
+                    >{deleteShowBusy ? '…' : 'YES'}</button>
+                    <button
+                      onClick={()=>setDeleteShowId(null)}
+                      style={{padding:'4px 8px',background:'#0a1525',border:'1px solid #1a3050',borderRadius:4,color:'#5a8aaa',fontSize:11,cursor:'pointer'}}
+                    >NO</button>
+                  </div>
+                ) : (
+                  <div style={{display:'flex',gap:6}}>
+                    <button
+                      onClick={()=>openEvent(ev.id)}
+                      style={{padding:'6px 14px',background:'#1F3864',border:'1px solid #2a6aaa',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer',whiteSpace:'nowrap'}}
+                    >OPEN</button>
+                    <button
+                      onClick={()=>setDeleteShowId(ev.id)}
+                      style={{padding:'6px 8px',background:'#1a0a0a',border:'1px solid #3a1a1a',borderRadius:4,color:'#7a3a3a',fontSize:11,cursor:'pointer'}}
+                      title="Delete this show"
+                    >🗑</button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
