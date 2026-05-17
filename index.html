@@ -3354,7 +3354,7 @@ function App() {
       {/* ── App Nav Dropdown ── */}
       <div className="app-nav" onBlur={e=>{ if(!e.currentTarget.contains(e.relatedTarget)) setNavOpen(false); }} tabIndex={-1}>
         <div className="app-nav-trigger" onClick={()=>setNavOpen(o=>!o)}>
-          <h1>{view==='manifest'?'📋 GLOBAL MANIFEST':view==='truckList'?'🚚 TRUCK LIST':view==='signs'?'🪧 TRUCK SIGNS':view==='recover'?'🔧 DATA RECOVERY':view==='history'?'📡 ACTIVITY LOG':view==='autopick'?'🤖 AUTO PACK BETA':'🚛 TRUCK PACKER'}</h1>
+          <h1>{view==='manifest'?'📋 GLOBAL MANIFEST':view==='truckList'?'🚚 TRUCK LIST':view==='signs'?'🪧 TRUCK SIGNS':view==='recover'?'🔧 DATA RECOVERY':view==='history'?'📡 ACTIVITY LOG':view==='report'?'📊 EVENT REPORT':view==='autopick'?'🤖 AUTO PACK BETA':'🚛 TRUCK PACKER'}</h1>
           <span className="app-nav-caret">{navOpen ? '▲' : '▼'}</span>
         </div>
         {navOpen && (
@@ -3384,6 +3384,11 @@ function App() {
               style={{color:'#4a9a6a'}}
               onClick={()=>{ setView('history'); setNavOpen(false); }}>
               📡 Activity Log
+            </div>
+            <div className={`app-nav-item${view==='report'?' active':''}`}
+              style={{color:'#7ab0d8'}}
+              onClick={()=>{ setView('report'); setNavOpen(false); }}>
+              📊 Event Report
             </div>
             <div className={`app-nav-item${view==='recover'?' active':''}`}
               style={{color:'#ffcc80'}}
@@ -6206,6 +6211,188 @@ function App() {
               </div>
             </div>
           )}
+        </div>
+      );
+    })()}
+
+    {/* ── EVENT REPORT ── */}
+    {view==='report' && (()=>{
+      const STATUS_ORDER = ['loaded','staged','atdock','unloaded','backloaded','empty','pending'];
+      const STATUS_COLORS = {loaded:'#43A047',staged:'#1E88E5',atdock:'#4a8eff',unloaded:'#e6c200',backloaded:'#FF9800',empty:'#E53935',pending:'#546E7A'};
+      const STATUS_LABELS = {loaded:'Loaded',staged:'Staged',atdock:'At Dock',unloaded:'Unloaded',backloaded:'Backloaded',empty:'Empty',pending:'Pending'};
+      const fmtDur = ms => {
+        const s=Math.floor(ms/1000), m=Math.floor(s/60), h=Math.floor(m/60);
+        if(h>0) return `${h}h ${m%60}m`;
+        if(m>0) return `${m}m ${s%60}s`;
+        return `${s}s`;
+      };
+
+      // Fleet status counts
+      const statusCounts = {};
+      STATUS_ORDER.forEach(s=>{statusCounts[s]=0;});
+      sortedTruckIds.forEach(tid=>{
+        const s=truckLoaded[tid]?.status||'pending';
+        statusCounts[s]=(statusCounts[s]||0)+1;
+      });
+
+      // Load times — build per-truck timeline from activityLog
+      const truckTimelines = {};
+      activityLog.filter(e=>e.type==='STATUS'&&e.truckId).forEach(e=>{
+        if(!truckTimelines[e.truckId]) truckTimelines[e.truckId]=[];
+        truckTimelines[e.truckId].push({status:e.status,ts:e.ts});
+      });
+      Object.values(truckTimelines).forEach(tl=>tl.sort((a,b)=>a.ts-b.ts));
+      const loadTimes=[];
+      Object.entries(truckTimelines).forEach(([tid,events])=>{
+        const loadedEv=events.slice().reverse().find(e=>e.status==='loaded');
+        if(!loadedEv) return;
+        const startEv=events.filter(e=>e.ts<loadedEv.ts&&['staged','atdock','pending'].includes(e.status)).slice(-1)[0];
+        if(!startEv) return;
+        const dur=loadedEv.ts-startEv.ts;
+        if(dur>0&&dur<24*3600*1000) loadTimes.push({tid,duration:dur,loadedAt:loadedEv.ts});
+      });
+      loadTimes.sort((a,b)=>a.duration-b.duration);
+      const fastest=loadTimes[0], slowest=loadTimes[loadTimes.length-1];
+      const avgMs=loadTimes.length?loadTimes.reduce((s,x)=>s+x.duration,0)/loadTimes.length:0;
+      const medMs=loadTimes.length?loadTimes[Math.floor(loadTimes.length/2)].duration:0;
+
+      // Activity timeline by hour
+      const hourCounts={};
+      activityLog.filter(e=>e.type==='STATUS').forEach(e=>{
+        const h=new Date(e.ts).getHours();
+        hourCounts[h]=(hourCounts[h]||0)+1;
+      });
+      const hours=Object.keys(hourCounts).map(Number).sort((a,b)=>a-b);
+      const maxHourCount=Math.max(...Object.values(hourCounts),1);
+      const peakHour=hours.length?hours.reduce((pk,h)=>hourCounts[h]>hourCounts[pk]?h:pk,hours[0]):null;
+
+      const card={background:'#050d1a',border:'1px solid #0d2035',borderRadius:6,padding:'14px 16px'};
+      const cardHdr={fontSize:10,letterSpacing:'.15em',color:'#3a6080',marginBottom:12};
+
+      return (
+        <div style={{flex:1,overflowY:'auto',padding:'20px 24px',background:'#020810',color:'#cdd9e8',fontFamily:"'Courier New',Courier,monospace"}}>
+          {/* Header bar */}
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:22,borderBottom:'1px solid #0a1a2a',paddingBottom:12}}>
+            <span style={{fontSize:12,fontWeight:'bold',letterSpacing:'.18em',color:'#7ab0d8'}}>SAP SAPPHIRE 2026</span>
+            <span style={{color:'#1a3a5a'}}>·</span>
+            <span style={{fontSize:11,color:'#3a6080',letterSpacing:'.1em'}}>{sortedTruckIds.length} TRUCKS IN FLEET</span>
+            <div style={{marginLeft:'auto',fontSize:10,color:'#2a4060'}}>{new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+          </div>
+
+          {/* Three-column stat cards */}
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:14,marginBottom:18}}>
+
+            {/* Fleet Status */}
+            <div style={card}>
+              <div style={cardHdr}>FLEET STATUS</div>
+              {STATUS_ORDER.filter(s=>statusCounts[s]>0).map(s=>(
+                <div key={s} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                  <div style={{width:7,height:7,borderRadius:'50%',background:STATUS_COLORS[s],flexShrink:0}}/>
+                  <span style={{fontSize:11,color:'#6a8a9a',flex:1}}>{STATUS_LABELS[s]}</span>
+                  <span style={{fontSize:20,fontWeight:'bold',color:STATUS_COLORS[s]}}>{statusCounts[s]}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* Load Times */}
+            <div style={card}>
+              <div style={cardHdr}>LOAD TIMES</div>
+              {loadTimes.length===0?(
+                <div style={{color:'#1e3a50',fontSize:11,paddingTop:4}}>// no load history yet</div>
+              ):(
+                <>
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:9,color:'#2a5070',letterSpacing:'.1em',marginBottom:3}}>⚡ FASTEST</div>
+                    <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+                      <span style={{fontSize:20,fontWeight:'bold',color:'#43A047'}}>{fmtDur(fastest.duration)}</span>
+                      <span style={{fontSize:10,color:'#3a6a40'}}>{fastest.tid}</span>
+                    </div>
+                  </div>
+                  <div style={{marginBottom:10}}>
+                    <div style={{fontSize:9,color:'#2a5070',letterSpacing:'.1em',marginBottom:3}}>🐢 SLOWEST</div>
+                    <div style={{display:'flex',alignItems:'baseline',gap:8}}>
+                      <span style={{fontSize:20,fontWeight:'bold',color:'#FF9800'}}>{fmtDur(slowest.duration)}</span>
+                      <span style={{fontSize:10,color:'#806030'}}>{slowest.tid}</span>
+                    </div>
+                  </div>
+                  <div style={{borderTop:'1px solid #0d2035',paddingTop:8}}>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                      <span style={{fontSize:10,color:'#3a6080'}}>Average</span>
+                      <span style={{fontSize:12,fontWeight:'bold',color:'#8ab8cc'}}>{fmtDur(avgMs)}</span>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}>
+                      <span style={{fontSize:10,color:'#3a6080'}}>Median</span>
+                      <span style={{fontSize:12,fontWeight:'bold',color:'#8ab8cc'}}>{fmtDur(medMs)}</span>
+                    </div>
+                    <div style={{fontSize:9,color:'#2a4060'}}>n={loadTimes.length} trucks measured</div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Big number */}
+            <div style={{...card,display:'flex',flexDirection:'column',justifyContent:'space-between'}}>
+              <div style={cardHdr}>LOADS COMPLETE</div>
+              <div style={{textAlign:'center',padding:'8px 0'}}>
+                <div style={{fontSize:60,fontWeight:'bold',color:'#43A047',lineHeight:1}}>{statusCounts.loaded}</div>
+                <div style={{fontSize:9,color:'#2a6040',letterSpacing:'.15em',marginTop:6}}>TRUCKS LOADED</div>
+              </div>
+              <div style={{borderTop:'1px solid #0d2035',paddingTop:10}}>
+                <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                  <span style={{fontSize:10,color:'#3a6080'}}>Still working</span>
+                  <span style={{fontSize:12,fontWeight:'bold',color:'#e6c200'}}>{(statusCounts.staged||0)+(statusCounts.atdock||0)+(statusCounts.unloaded||0)+(statusCounts.pending||0)}</span>
+                </div>
+                <div style={{display:'flex',justifyContent:'space-between'}}>
+                  <span style={{fontSize:10,color:'#3a6080'}}>Total fleet</span>
+                  <span style={{fontSize:12,color:'#6a8a9a'}}>{sortedTruckIds.length}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Load time leaderboard */}
+          {loadTimes.length>0&&(
+            <div style={{...card,marginBottom:18}}>
+              <div style={cardHdr}>LOAD TIME LEADERBOARD</div>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:6}}>
+                {loadTimes.slice(0,20).map((lt,i)=>(
+                  <div key={lt.tid} style={{display:'flex',alignItems:'center',gap:6,padding:'4px 8px',background:'#020810',borderRadius:3,border:'1px solid #0a1a2a'}}>
+                    <span style={{fontSize:9,color:'#1a3a50',width:16,textAlign:'right',flexShrink:0}}>#{i+1}</span>
+                    <span style={{fontSize:11,color:'#7ab4cc',fontWeight:'bold',flex:1}}>{lt.tid}</span>
+                    <span style={{fontSize:11,color: i===0?'#43A047':i===loadTimes.length-1?'#FF9800':'#6a8a9a',fontWeight: i===0||i===loadTimes.length-1?'bold':'normal'}}>{fmtDur(lt.duration)}</span>
+                  </div>
+                ))}
+                {loadTimes.length>20&&<div style={{fontSize:9,color:'#1a3a50',padding:'4px 8px',alignSelf:'center'}}>+{loadTimes.length-20} more</div>}
+              </div>
+            </div>
+          )}
+
+          {/* Activity timeline */}
+          <div style={card}>
+            <div style={cardHdr}>ACTIVITY TIMELINE — STATUS CHANGES BY HOUR</div>
+            {hours.length===0?(
+              <div style={{color:'#1e3a50',fontSize:11}}>// no activity logged yet</div>
+            ):(
+              <div style={{display:'flex',flexDirection:'column',gap:5}}>
+                {hours.map(h=>{
+                  const count=hourCounts[h];
+                  const pct=count/maxHourCount;
+                  const isPeak=h===peakHour;
+                  const hh=h>12?h-12:h===0?12:h, ampm=h>=12?'PM':'AM';
+                  return (
+                    <div key={h} style={{display:'flex',alignItems:'center',gap:10}}>
+                      <span style={{fontSize:10,color:'#3a6080',width:52,textAlign:'right',flexShrink:0}}>{hh}:00 {ampm}</span>
+                      <div style={{flex:1,height:16,background:'#020810',borderRadius:2,overflow:'hidden',position:'relative'}}>
+                        <div style={{width:`${Math.max(pct*100,1.5)}%`,height:'100%',background:isPeak?'#1e5090':'#0d2a40',borderRadius:2}}/>
+                      </div>
+                      <span style={{fontSize:10,width:22,textAlign:'right',flexShrink:0,color:isPeak?'#4a8eff':'#3a6080',fontWeight:isPeak?'bold':'normal'}}>{count}</span>
+                      {isPeak&&<span style={{fontSize:8,color:'#2a4a80',letterSpacing:'.1em',flexShrink:0}}>PEAK</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       );
     })()}
