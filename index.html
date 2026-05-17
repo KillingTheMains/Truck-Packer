@@ -2033,6 +2033,7 @@ function App() {
   // ── Immediately write truckLoaded status changes to Firestore ───────────────
   const prevTruckLoadedFSRef = useRef(null);
   const fsInboundRef = useRef(false); // true while applying a remote Firestore snapshot — suppresses write-back
+  const [fsInboundTick, setFsInboundTick] = React.useState(0); // incremented on every snapshot to guarantee flag reset
   useEffect(() => {
     if (!appLoaded) return;
     const prev = prevTruckLoadedFSRef.current;
@@ -2057,15 +2058,6 @@ function App() {
     });
   }, [truckLoaded, appLoaded]);
 
-  // ── Reset fsInboundRef after every snapshot, even when no truck data changed ─
-  // The write effect above resets the flag when truckLoaded actually changes.
-  // But if snapshot data == current state, setTruckLoaded returns prev (no re-render),
-  // the write effect never runs, and fsInboundRef stays true — blocking all local writes.
-  // This effect fires on every snapshot tick regardless, guaranteeing the flag is cleared.
-  useEffect(() => {
-    if (fsInboundTick > 0) fsInboundRef.current = false;
-  }, [fsInboundTick]);
-
   // ── Debounced notes sync to Firestore (1s) ──────────────────────────────────
   const notesTimerRef = useRef(null);
   const prevNotesFSRef = useRef({});
@@ -2089,7 +2081,12 @@ function App() {
 
   // ── Real-time Firestore listeners — multi-user live sync ────────────────────
   const [liveLastSync, setLiveLastSync] = React.useState(null);
-  const [fsInboundTick, setFsInboundTick] = React.useState(0); // incremented on every snapshot to guarantee flag reset
+  // Reset fsInboundRef after every snapshot, even when no truck data changed.
+  // fsInboundTick is declared above (before all effects that reference it) so Babel's var
+  // hoisting doesn't shadow it with undefined in the dependency array.
+  useEffect(() => {
+    if (fsInboundTick > 0) fsInboundRef.current = false;
+  }, [fsInboundTick]);
   useEffect(() => {
     if (!appLoaded) return;
     // status collection → truckLoaded + truckDock + truckNotes
