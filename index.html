@@ -1794,29 +1794,34 @@ function App() {
           });
           setTrucks(base);
         } else {
-          // First run — migrate layout from localStorage
-          console.log('[FS] layouts empty — migrating from localStorage');
-          try {
-            const savedTrucks = lsGet('truckPacker_trucks');
-            if (savedTrucks) {
-              const parsed = JSON.parse(savedTrucks);
-              const base = initTrucks();
-              Object.keys(base).forEach(id => { if (!parsed[id]) parsed[id] = base[id]; });
-              Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
-              setTrucks(parsed);
-              // Seed Firestore layouts async (only non-empty trucks)
-              setTimeout(() => {
-                Object.entries(parsed).forEach(([id, t]) => {
-                  if (Object.keys(t.placed || {}).length === 0) return;
-                  evtCol('layouts').doc(id).set({
-                    placed: t.placed || {}, counter: t.counter || 1,
-                    scans: (t.scans || []).slice(-50), info: t.info || emptyTruckInfo(id),
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                  }).catch(e => console.warn('[FS] seed layout failed:', id, e.message));
-                });
-              }, 2000);
-            }
-          } catch(e) { console.warn('[FS] localStorage layout migration failed:', e); }
+          if (!eventSnap.exists) {
+            // True first run (no event doc) — migrate layout from localStorage
+            console.log('[FS] layouts empty + no event doc — migrating from localStorage');
+            try {
+              const savedTrucks = lsGet('truckPacker_trucks');
+              if (savedTrucks) {
+                const parsed = JSON.parse(savedTrucks);
+                const base = initTrucks();
+                Object.keys(base).forEach(id => { if (!parsed[id]) parsed[id] = base[id]; });
+                Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
+                setTrucks(parsed);
+                // Seed Firestore layouts async (only non-empty trucks)
+                setTimeout(() => {
+                  Object.entries(parsed).forEach(([id, t]) => {
+                    if (Object.keys(t.placed || {}).length === 0) return;
+                    evtCol('layouts').doc(id).set({
+                      placed: t.placed || {}, counter: t.counter || 1,
+                      scans: (t.scans || []).slice(-50), info: t.info || emptyTruckInfo(id),
+                      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    }).catch(e => console.warn('[FS] seed layout failed:', id, e.message));
+                  });
+                }, 2000);
+              }
+            } catch(e) { console.warn('[FS] localStorage layout migration failed:', e); }
+          } else {
+            // New empty show — start fresh, no localStorage fallback
+            console.log('[FS] layouts empty — new show, starting fresh');
+          }
         }
 
         // ── Truck status + notes ─────────────────────────────────────────
@@ -1832,23 +1837,28 @@ function App() {
           if (Object.keys(newNotes).length > 0)  setTruckNotes(newNotes);
           if (Object.keys(newDock).length > 0)   setTruckDock(newDock);
         } else {
-          // First run — migrate status from localStorage
-          try {
-            const savedLoaded = lsGet('truckPacker_truckLoaded');
-            if (savedLoaded) {
-              const parsed = JSON.parse(savedLoaded);
-              setTruckLoaded(parsed);
-              setTimeout(() => {
-                Object.entries(parsed).forEach(([id, v]) => {
-                  evtCol('status').doc(id).set({
-                    status: v.status || null, loadedAt: v.loadedAt || null,
-                    statusAt: v.statusAt || v.loadedAt || null, notes: '',
-                    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                  }).catch(e => console.warn('[FS] seed status failed:', id, e.message));
-                });
-              }, 2000);
-            }
-          } catch(e) {}
+          if (!eventSnap.exists) {
+            // True first run (no event doc) — migrate status from localStorage
+            try {
+              const savedLoaded = lsGet('truckPacker_truckLoaded');
+              if (savedLoaded) {
+                const parsed = JSON.parse(savedLoaded);
+                setTruckLoaded(parsed);
+                setTimeout(() => {
+                  Object.entries(parsed).forEach(([id, v]) => {
+                    evtCol('status').doc(id).set({
+                      status: v.status || null, loadedAt: v.loadedAt || null,
+                      statusAt: v.statusAt || v.loadedAt || null, notes: '',
+                      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+                    }).catch(e => console.warn('[FS] seed status failed:', id, e.message));
+                  });
+                }, 2000);
+              }
+            } catch(e) {}
+          } else {
+            // New empty show — start fresh, no localStorage fallback
+            console.log('[FS] status empty — new show, starting fresh');
+          }
         }
 
         // ── Truck metadata (drives Truck List view) ──────────────────────
