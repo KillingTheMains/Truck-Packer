@@ -2038,7 +2038,7 @@ function App() {
     const prev = prevTruckLoadedFSRef.current;
     prevTruckLoadedFSRef.current = truckLoaded;
     if (prev === null) return; // skip initial mount
-    if (fsInboundRef.current) return; // remote update — don't echo back to Firestore
+    if (fsInboundRef.current) { fsInboundRef.current = false; return; } // remote update — reset flag here (after effects run) and don't echo back
     // Find changed truck IDs
     const allIds = new Set([...Object.keys(truckLoaded), ...(prev ? Object.keys(prev) : [])]);
     allIds.forEach(tid => {
@@ -2113,7 +2113,7 @@ function App() {
       });
       setLiveLastSync(Date.now());
       // Reset flag after React effects run (effects run before setTimeout(0))
-      setTimeout(() => { fsInboundRef.current = false; }, 0);
+      // Note: fsInboundRef is reset in the truckLoaded write effect after it runs, not here
     }, err => console.warn('[FS] live status listener error:', err.message));
 
     // meta collection → truckMeta (trailer adds/removes/edits)
@@ -3011,8 +3011,12 @@ function App() {
   const clearDock = (tid) => {
     addHistoryEntry('DOCK', tid, null, `${tid} → DOCK CLEARED`);
     setTruckDock(prev => { const n = { ...prev }; delete n[tid]; return n; });
+    // Include current status in the write so the resulting snapshot doesn't carry stale status data
+    // (prevents the snapshot from reverting a status change that hasn't been flushed to Firestore yet)
+    const curStatus = truckLoaded[tid];
     db.collection('status').doc(tid).set(
-      { dock: null, updatedAt: firebase.firestore.FieldValue.serverTimestamp() },
+      { dock: null, updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+        ...(curStatus?.status ? { status: curStatus.status, statusAt: curStatus.statusAt||null } : {}) },
       { merge: true }
     ).catch(e => console.warn('[FS] dock clear failed:', tid, e.message));
   };
