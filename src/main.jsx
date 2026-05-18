@@ -725,6 +725,7 @@ function App() {
   const [setCurrentShowStatus, setSetCurrentShowStatus] = useState(''); // feedback text
   const [deleteShowId,       setDeleteShowId]       = useState(null); // id being confirmed for deletion
   const [deleteShowBusy,     setDeleteShowBusy]     = useState(false);
+  const [splashBackupBusy,   setSplashBackupBusy]   = useState(false);
 
   const [trucks,     setTrucks]     = useState({});
   const [appLoaded,  setAppLoaded]  = useState(false);
@@ -2731,6 +2732,46 @@ function App() {
 
   // ── Splash screen: show when no event selected ───────────────────────────
   if (!currentEventId) {
+    // ── Backup all shows ─────────────────────────────────────────────────
+    // Dumps every events/{slug}/* doc plus /config/library and
+    // /config/currentShow into a single JSON the user can save anywhere.
+    // Used as a safety net before risky operations and a manual "snapshot"
+    // until an automated cloud-side backup is in place.
+    const backupAllShows = async () => {
+      setSplashBackupBusy(true);
+      try {
+        const fs = firebase.firestore();
+        const eventsSnap = await fs.collection('events').get();
+        const out = { exportedAt: new Date().toISOString(), schemaVersion: 1, events: {}, globalConfig: {} };
+        for (const eventDoc of eventsSnap.docs) {
+          const slug = eventDoc.id;
+          const event = { meta: eventDoc.data() };
+          for (const col of ['layouts','meta','status','logs','cases','config']) {
+            const snap = await fs.collection('events').doc(slug).collection(col).get();
+            event[col] = {};
+            snap.docs.forEach(d => { event[col][d.id] = d.data(); });
+          }
+          out.events[slug] = event;
+        }
+        const [libSnap, curSnap] = await Promise.all([
+          fs.collection('config').doc('library').get(),
+          fs.collection('config').doc('currentShow').get(),
+        ]);
+        out.globalConfig.library = libSnap.data();
+        out.globalConfig.currentShow = curSnap.data();
+        const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `truck-packer-backup-${new Date().toISOString().slice(0,10)}.json`;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      } catch(e) {
+        alert('Backup failed: ' + e.message);
+      }
+      setSplashBackupBusy(false);
+    };
+
     const openEvent = (slug) => {
       setCurrentEventId(slug);
       try { lsSet('truckPacker_eventId', slug); } catch(e) {}
@@ -2858,6 +2899,12 @@ function App() {
           <div style={{background:'#0a1828',border:'1px solid #1a3050',borderRadius:8,marginBottom:20}}>
             <div style={{padding:'12px 16px',borderBottom:'1px solid #1a3050',display:'flex',alignItems:'center',gap:10}}>
               <span style={{fontSize:11,fontWeight:'bold',letterSpacing:'.1em',color:'#90A4AE',flex:1}}>SHOWS</span>
+              <button
+                onClick={backupAllShows}
+                disabled={splashBackupBusy}
+                title="Download a JSON snapshot of every show plus the global library — keep one before risky operations"
+                style={{padding:'5px 12px',background:'#1b3a1f',border:'1px solid #2a6a2e',borderRadius:4,color:'#a5d6a7',fontSize:11,fontWeight:'bold',cursor:splashBackupBusy?'wait':'pointer',letterSpacing:'.04em',marginRight:8}}
+              >{splashBackupBusy ? 'BACKING UP…' : '💾 BACKUP ALL'}</button>
               <button
                 onClick={()=>{ setNewShowModal(true); setNewShowName(''); setNewShowSlug(''); }}
                 style={{padding:'5px 12px',background:'#1a3050',border:'1px solid #2a5a8a',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer',letterSpacing:'.04em'}}

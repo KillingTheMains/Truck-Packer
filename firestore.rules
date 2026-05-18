@@ -1,0 +1,67 @@
+// Firestore security rules for Truck Packer.
+//
+// THIS FILE IS NOT YET DEPLOYED.
+// To activate, run from the repo root:
+//   npx firebase login
+//   npx firebase deploy --only firestore:rules --project ktm-logistics-b2309
+// (one-time setup: `npx firebase init firestore` and pick this file when prompted.)
+//
+// Current model: small team. Authenticated users on an explicit allowlist
+// can read/write everything. Anonymous users get no access — except the
+// public dashboard, which reads /config/currentShow + the corresponding
+// events/{slug}/status for read-only display.
+//
+// When adding teammates, add their UID below in `isStaff()`. Get the UID
+// from Firebase Console -> Authentication after their first sign-in.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Allowlist of trusted users ────────────────────────────────────────
+    function isStaff() {
+      return request.auth != null && request.auth.uid in [
+        // Add staff Firebase Auth UIDs here, one per line.
+        // 'AbCdEf123456789...'
+      ];
+    }
+
+    // ── Public dashboard (read-only) ──────────────────────────────────────
+    // The public dashboard renders /config/currentShow to find the live
+    // event, then reads its status collection. Everything else stays
+    // behind auth.
+    match /config/currentShow {
+      allow read: if true;
+      allow write: if isStaff();
+    }
+
+    // ── Item library (global, shared across shows) ────────────────────────
+    match /config/library {
+      allow read: if true; // safe to expose — non-sensitive
+      allow write: if isStaff();
+    }
+
+    // ── Per-show data ─────────────────────────────────────────────────────
+    match /events/{slug} {
+      // Top-level show doc (name, slug, createdAt)
+      allow read, write: if isStaff();
+
+      // Status subcollection is readable by the public dashboard.
+      match /status/{truckId} {
+        allow read: if true;
+        allow write: if isStaff();
+      }
+
+      // Everything else (layouts, meta, logs, cases, config) is staff-only.
+      match /{subcol}/{docId} {
+        allow read, write: if isStaff();
+      }
+    }
+
+    // ── Deny everything else by default ───────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
