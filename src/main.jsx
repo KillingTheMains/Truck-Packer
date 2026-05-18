@@ -8,6 +8,7 @@ import { CASE_TYPE_MAP } from './data/caseTypes.js';
 import { MONTHS_SHORT, fmtDDMMMYYYY } from './utils/dates.js';
 import { lightenHex } from './utils/colors.js';
 import { getTruckPrefix, getManifestNum, LAYER_PLACEHOLDERS, LAYER_COLOR_LABELS, getLayerInfo } from './utils/manifest.js';
+import { signInWithGoogle, signOut, onAuthChange, isPublicMode } from './utils/auth.js';
 
 const { useState, useRef, useEffect, useCallback } = React;
 
@@ -698,7 +699,63 @@ const writeBackupFile = async (dirHandle, trucks, truckLoaded, showName) => {
 };
 
 // ── Main App ──────────────────────────────────────────────────────────────────
-function App() {
+// ── Sign-in screen ─────────────────────────────────────────────────────────
+// Shown when no Firebase user is signed in (and we're not in ?public=1
+// dashboard mode). Once a user signs in, App() takes over.
+function SignInScreen({ error, busy, onSignIn }) {
+  return (
+    <div style={{position:'fixed',inset:0,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',background:'#020810',color:'#cdd9e8',fontFamily:"'Courier New',Courier,monospace",padding:'24px',textAlign:'center'}}>
+      <div style={{fontSize:42,marginBottom:8}}>🚛</div>
+      <div style={{fontSize:24,fontWeight:'bold',letterSpacing:'.08em',marginBottom:6}}>TRUCK PACKER</div>
+      <div style={{fontSize:11,color:'#3a6080',letterSpacing:'.18em',marginBottom:36}}>MULTI-EVENT LOGISTICS SYSTEM</div>
+      <button onClick={onSignIn} disabled={busy}
+        style={{padding:'10px 22px',background:'#1F3864',border:'1px solid #2a6aaa',borderRadius:6,color:'#90cfff',fontSize:13,fontWeight:'bold',letterSpacing:'.04em',cursor:busy?'wait':'pointer'}}>
+        {busy ? 'SIGNING IN…' : '🔑 SIGN IN WITH GOOGLE'}
+      </button>
+      {error && (
+        <div style={{marginTop:18,fontSize:11,color:'#ff8a80',maxWidth:420}}>{error}</div>
+      )}
+      <div style={{marginTop:36,fontSize:10,color:'#445',maxWidth:480,lineHeight:1.6}}>
+        This app uses a small-team allowlist. After you sign in, your account
+        needs to be added to the Firestore rules before you can see show
+        data. If you only need to view a public dashboard, append <code style={{color:'#7cf'}}>?public=1</code> to the URL.
+      </div>
+    </div>
+  );
+}
+
+// ── Auth gate ──────────────────────────────────────────────────────────────
+// Wraps the real <App/> so all of App's hooks only run once auth is
+// resolved. This avoids React's "hooks called in different order" error
+// when signing in/out mid-session.
+function AuthGate() {
+  const [authUser, setAuthUser] = useState(null);
+  const [authResolved, setAuthResolved] = useState(false);
+  const [signInBusy, setSignInBusy] = useState(false);
+  const [signInError, setSignInError] = useState('');
+
+  useEffect(() => {
+    const unsub = onAuthChange(u => { setAuthUser(u || false); setAuthResolved(true); });
+    return unsub;
+  }, []);
+
+  const doSignIn = async () => {
+    setSignInBusy(true); setSignInError('');
+    try { await signInWithGoogle(); }
+    catch(e) { setSignInError(e.message || 'Sign-in failed'); }
+    setSignInBusy(false);
+  };
+
+  if (!authResolved) {
+    return <div style={{position:'fixed',inset:0,display:'flex',alignItems:'center',justifyContent:'center',background:'#020810',color:'#3a6080',fontFamily:"'Courier New',Courier,monospace",fontSize:12,letterSpacing:'.1em'}}>LOADING…</div>;
+  }
+  if (!authUser && !isPublicMode()) {
+    return <SignInScreen busy={signInBusy} error={signInError} onSignIn={doSignIn}/>;
+  }
+  return <App authUser={authUser}/>;
+}
+
+function App({ authUser }) {
   const [currentEventId, setCurrentEventId] = useState(() => {
     try { return lsGet('truckPacker_eventId') || null; } catch(e) { return null; }
   });
@@ -2968,13 +3025,21 @@ function App() {
             </div>
           )}
 
-          {/* Public portal link */}
-          <div style={{textAlign:'center',marginTop:8}}>
+          {/* Public portal link + signed-in indicator */}
+          <div style={{textAlign:'center',marginTop:8,display:'flex',gap:18,justifyContent:'center',alignItems:'center',color:'#3a6080',fontSize:11,letterSpacing:'.06em'}}>
             <a href="https://script.google.com/macros/s/AKfycbz-K_UtMZpW5jVh4Ztdx71ul0a5T8ko62KSV6EEsW1avidYRdGaDFOzFLts4JXFBaBXDQ/exec"
               target="_blank" rel="noopener noreferrer"
-              style={{color:'#3a6080',fontSize:11,textDecoration:'none',letterSpacing:'.06em'}}>
+              style={{color:'#3a6080',textDecoration:'none'}}>
               🌐 Public Portal
             </a>
+            {authUser && (
+              <>
+                <span>·</span>
+                <span title={`Firebase UID: ${authUser.uid}`}>{authUser.email || authUser.displayName || 'Signed in'}</span>
+                <span>·</span>
+                <button onClick={signOut} style={{background:'none',border:'none',color:'#3a6080',cursor:'pointer',fontSize:11,letterSpacing:'.06em',padding:0,textDecoration:'underline'}}>Sign out</button>
+              </>
+            )}
           </div>
         </div>
 
@@ -6219,4 +6284,4 @@ function App() {
   </>);
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+ReactDOM.createRoot(document.getElementById('root')).render(<AuthGate/>);
