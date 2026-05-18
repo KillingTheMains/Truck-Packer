@@ -879,8 +879,11 @@ function App({ authUser }) {
     const eid = lsGet('truckPacker_eventId') || null;
     return JSON.parse(lsGet(eid ? `truckPacker_history_${eid}` : 'truckPacker_history')||'[]');
   }catch(e){return[];} });
-  const [historyFilter,     setHistoryFilter]     = useState('ALL');
-  const [historyTruckFilter, setHistoryTruckFilter] = useState('');
+  // Filters persist across reloads — these are user preferences, not show data.
+  const [historyFilter,     setHistoryFilter]     = useState(()=>lsGet('truckPacker_historyFilter')||'ALL');
+  const [historyTruckFilter, setHistoryTruckFilter] = useState(()=>lsGet('truckPacker_historyTruckFilter')||'');
+  useEffect(()=>{ try { lsSet('truckPacker_historyFilter', historyFilter); } catch(e) {} }, [historyFilter]);
+  useEffect(()=>{ try { lsSet('truckPacker_historyTruckFilter', historyTruckFilter); } catch(e) {} }, [historyTruckFilter]);
   const [nowTick, setNowTick] = useState(Date.now());
   const [caseModalOpen,     setCaseModalOpen]     = useState(false);
   const [caseLookupId,      setCaseLookupId]      = useState('');
