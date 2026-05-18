@@ -17,5 +17,11 @@ Backups/
 .DS_Store
 Thumbs.db
 
+# Node / Vite build artifacts
+node_modules/
+dist/
+.vite/
+*.log
+
 # Don't track the old filename once renamed
 Trailer Packer.html
