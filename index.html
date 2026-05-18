@@ -1554,6 +1554,12 @@ function App() {
   // ── Multi-event Firestore helper ──────────────────────────────────────────
   const evtCol = (name) => db.collection('events').doc(currentEventId).collection(name);
 
+  // ── Per-show localStorage key helper ──────────────────────────────────────
+  // Use this for any show-specific data so opening Show A never reads
+  // Show B's cached fleet/curId/notes/history. Global keys (UI prefs,
+  // showName, etc.) still use plain `truckPacker_{name}`.
+  const evKey = (name) => currentEventId ? `truckPacker_${name}_${currentEventId}` : `truckPacker_${name}`;
+
   // ── Splash screen state ────────────────────────────────────────────────────
   const [splashEvents,       setSplashEvents]       = useState([]);
   const [splashLoading,      setSplashLoading]      = useState(false);
@@ -1572,7 +1578,12 @@ function App() {
   const [appLoaded,  setAppLoaded]  = useState(false);
   const [saveStatus, setSaveStatus] = useState('saved'); // 'saved'|'saving'|'unsaved'|'error'
   const saveTimerRef = useRef(null);
-  const [curId,      setCurId]      = useState(()=>lsGet('truckPacker_curId')||'FAV1');
+  const [curId,      setCurId]      = useState(() => {
+    // Per-show curId, falls back to no selection. effectiveCurId picks the
+    // first available truck if curId is empty or missing from the fleet.
+    const eid = lsGet('truckPacker_eventId') || null;
+    return lsGet(eid ? `truckPacker_curId_${eid}` : 'truckPacker_curId') || '';
+  });
   const [mode,       setMode]       = useState('move');  // 'place' | 'move'
   const [selIdx,     setSelIdx]     = useState(null);    // library selection index
   const [selRotated, setSelRotated] = useState(false);
@@ -1654,7 +1665,10 @@ function App() {
   const [dockInput,            setDockInput]            = useState('');
   const [truckDock,            setTruckDock]            = useState({}); // {truckId: dockNumber string}
   // ── History log ───────────────────────────────────────────────────────────
-  const [activityLog,   setActivityLog]   = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_history')||'[]');}catch(e){return[];} });
+  const [activityLog,   setActivityLog]   = useState(()=>{ try{
+    const eid = lsGet('truckPacker_eventId') || null;
+    return JSON.parse(lsGet(eid ? `truckPacker_history_${eid}` : 'truckPacker_history')||'[]');
+  }catch(e){return[];} });
   const [historyFilter,     setHistoryFilter]     = useState('ALL');
   const [historyTruckFilter, setHistoryTruckFilter] = useState('');
   const [nowTick, setNowTick] = useState(Date.now());
@@ -1681,7 +1695,10 @@ function App() {
   const [tlAddOpen,        setTlAddOpen]        = useState(false);
   const [tlAddId,          setTlAddId]          = useState('');
   const [truckLoaded,      setTruckLoaded]      = useState({});
-  const [truckNotes,       setTruckNotes]       = useState(()=>{ try{return JSON.parse(lsGet('truckPacker_notes')||'{}');}catch{return{};} });
+  const [truckNotes,       setTruckNotes]       = useState(()=>{ try{
+    const eid = lsGet('truckPacker_eventId') || null;
+    return JSON.parse(lsGet(eid ? `truckPacker_notes_${eid}` : 'truckPacker_notes')||'{}');
+  }catch{return{};} });
   const [tlSort,   setTlSort]   = useState({col:-1, dir:'asc'});
   const [tlFilter, setTlFilter] = useState(()=>{
     try { const s=lsGet('truckPacker_tlFilter'); if(s) return new Set(JSON.parse(s)); } catch(e) {}
@@ -1848,6 +1865,9 @@ function App() {
         setEventName('');
         setShowName(showDisplayName);
         lsSet('truckPacker_showName', showDisplayName);
+        // Restore last-used truck selection for THIS show. effectiveCurId
+        // will pick the first available truck if this id isn't in the fleet.
+        setCurId(lsGet(evKey('curId')) || '');
 
         // ── Truck layouts ────────────────────────────────────────────────
         if (!layoutsSnap.empty) {
@@ -1883,28 +1903,9 @@ function App() {
           if (Object.keys(newNotes).length > 0)  setTruckNotes(newNotes);
           if (Object.keys(newDock).length > 0)   setTruckDock(newDock);
         } else {
-          if (!eventSnap.exists) {
-            // True first run (no event doc) — migrate status from localStorage
-            try {
-              const savedLoaded = lsGet('truckPacker_truckLoaded');
-              if (savedLoaded) {
-                const parsed = JSON.parse(savedLoaded);
-                setTruckLoaded(parsed);
-                setTimeout(() => {
-                  Object.entries(parsed).forEach(([id, v]) => {
-                    evtCol('status').doc(id).set({
-                      status: v.status || null, loadedAt: v.loadedAt || null,
-                      statusAt: v.statusAt || v.loadedAt || null, notes: '',
-                      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    }).catch(e => console.warn('[FS] seed status failed:', id, e.message));
-                  });
-                }, 2000);
-              }
-            } catch(e) {}
-          } else {
-            // New empty show — start fresh, no localStorage fallback
-            console.log('[FS] status empty — new show, starting fresh');
-          }
+          // Empty status — start fresh. The legacy localStorage migration
+          // here used to seed global SAP data into every new show.
+          console.log('[FS] status empty — starting fresh');
         }
 
         // ── Truck metadata (drives Truck List view) ──────────────────────
@@ -1965,16 +1966,18 @@ function App() {
         }
 
       } catch(e) {
-        // Firestore unavailable — fall back to localStorage
+        // Firestore unavailable — fall back to this show's localStorage cache.
+        // The per-show namespacing means we only ever read back the show that
+        // was last open, never another show's data.
         console.warn('[FS] load failed, falling back to localStorage:', e.message);
         try {
-          const savedTrucks = lsGet('truckPacker_trucks');
+          const savedTrucks = lsGet(evKey('trucks'));
           if (savedTrucks) {
             const parsed = JSON.parse(savedTrucks);
             Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
             setTrucks(parsed);
           }
-          const savedLoaded = lsGet('truckPacker_truckLoaded');
+          const savedLoaded = lsGet(evKey('truckLoaded'));
           if (savedLoaded) setTruckLoaded(JSON.parse(savedLoaded));
         } catch(err) {}
       } finally {
@@ -2049,9 +2052,9 @@ function App() {
         const t = trucks[tid];
         _trucksForStorage[tid] = { ...t, history: [], scans: (t.scans||[]).slice(-50) };
       });
-      try { lsSet('truckPacker_trucks', JSON.stringify(_trucksForStorage)); } catch(e) {
+      try { lsSet(evKey('trucks'), JSON.stringify(_trucksForStorage)); } catch(e) {
         console.warn('[TP] localStorage save failed — check storage quota'); }
-      try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
+      try { lsSet(evKey('truckLoaded'), JSON.stringify(truckLoaded)); } catch(e) {}
 
       // Write truck layouts to Firestore (only trucks with placed items)
       if (!currentEventId) { setSaveStatus('saved'); return; }
@@ -2126,9 +2129,9 @@ function App() {
         const t = trucks[tid];
         _t[tid] = { ...t, history: [], scans: (t.scans||[]).slice(-50) };
       });
-      try { lsSet('truckPacker_trucks', JSON.stringify(_t)); } catch(e) {}
-      try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
-      try { lsSet('truckPacker_notes', JSON.stringify(truckNotes)); } catch(e) {}
+      try { lsSet(evKey('trucks'), JSON.stringify(_t)); } catch(e) {}
+      try { lsSet(evKey('truckLoaded'), JSON.stringify(truckLoaded)); } catch(e) {}
+      try { lsSet(evKey('notes'), JSON.stringify(truckNotes)); } catch(e) {}
     }, 500);
   }, [trucks, truckLoaded, truckNotes, appLoaded]);
 
@@ -2273,9 +2276,9 @@ function App() {
     const onUnload = () => {
       // Synchronous localStorage save — strip history + trim scans (same as debounced save)
       const _tfs={}; Object.keys(trucks).forEach(tid=>{const t=trucks[tid];_tfs[tid]={...t,history:[],scans:(t.scans||[]).slice(-50)};});
-      try { lsSet('truckPacker_trucks', JSON.stringify(_tfs)); } catch(e) {}
-      try { lsSet('truckPacker_truckLoaded', JSON.stringify(truckLoaded)); } catch(e) {}
-      try { lsSet('truckPacker_notes', JSON.stringify(truckNotes)); } catch(e) {}
+      try { lsSet(evKey('trucks'), JSON.stringify(_tfs)); } catch(e) {}
+      try { lsSet(evKey('truckLoaded'), JSON.stringify(truckLoaded)); } catch(e) {}
+      try { lsSet(evKey('notes'), JSON.stringify(truckNotes)); } catch(e) {}
       // Firestore handles cloud sync — no sendBeacon needed
     };
     window.addEventListener('beforeunload', onUnload);
@@ -2325,7 +2328,7 @@ function App() {
     setTrucks(t => ({ ...t, [id]: fn(t[id] || { placed:{}, info:emptyTruckInfo(id), history:[], counter:1, scans:[] }) })), []);
 
   const switchTruck = (id) => {
-    setSelIdx(null); setSelPId(null); setHover(null); setDragId(null); setCurId(id); lsSet('truckPacker_curId', id);
+    setSelIdx(null); setSelPId(null); setHover(null); setDragId(null); setCurId(id); lsSet(evKey('curId'),id);
   };
 
   const setInfo = (field, val) =>
@@ -2903,7 +2906,7 @@ function App() {
     setActivityLog(prev => {
       const next = [entry,...prev].slice(0,500);
       // Keep last 100 in localStorage as fallback cache
-      try { lsSet('truckPacker_history', JSON.stringify(next.slice(0,100))); } catch(e) {}
+      try { lsSet(evKey('history'), JSON.stringify(next.slice(0,100))); } catch(e) {}
       return next;
     });
     // Persist to Firestore so history survives across devices and refreshes
@@ -3207,7 +3210,7 @@ function App() {
     setTruckModalBusy(true);
     const ok = await _createOneTruck(id);
     setTruckModalBusy(false);
-    if (ok) { setCurId(id); lsSet('truckPacker_curId', id); setTruckModal(null); }
+    if (ok) { setCurId(id); lsSet(evKey('curId'),id); setTruckModal(null); }
     else { alert(`Failed to add truck "${id}".`); }
   };
 
@@ -3247,7 +3250,7 @@ function App() {
     for (const id of fresh) { if (await _createOneTruck(id)) added++; }
     setTruckModalBusy(false);
     setTruckModal(null);
-    if (added > 0 && !curId) { setCurId(fresh[0]); lsSet('truckPacker_curId', fresh[0]); }
+    if (added > 0 && !curId) { setCurId(fresh[0]); lsSet(evKey('curId'),fresh[0]); }
   };
 
   // Rename: copy layout + meta + status to the new ID, then delete the old.
@@ -3286,7 +3289,7 @@ function App() {
       setTruckDock(moveKey);
       setTruckNotes(moveKey);
       setTruckMeta(moveKey);
-      if (curId === oldId) { setCurId(newId); lsSet('truckPacker_curId', newId); }
+      if (curId === oldId) { setCurId(newId); lsSet(evKey('curId'),newId); }
       addHistoryEntry('RENAME', newId, '', `${oldId} renamed to ${newId}`);
       setTruckModal(null);
     } catch(e) {
@@ -3618,6 +3621,11 @@ function App() {
           }
         }
         await db.collection('events').doc(slug).delete();
+        // Clean up per-show localStorage caches for the deleted show so its
+        // cached fleet/curId/notes don't linger and confuse future operations.
+        ['trucks','truckLoaded','notes','history','curId'].forEach(name => {
+          try { localStorage.removeItem(`truckPacker_${name}_${slug}`); } catch(e) {}
+        });
         setSplashEvents(prev => prev.filter(e => e.id !== slug));
         setDeleteShowId(null);
       } catch(e) {
