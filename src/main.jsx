@@ -1,57 +1,19 @@
-
-// ── localStorage compression helpers ─────────────────────────────────────────
-// Wraps every read/write with LZ-String so the ~5MB quota is effectively
-// eliminated. Old uncompressed entries decompress to empty string → falls back
-// to the raw value, so existing data keeps working without a migration step.
-const lsSet = (key, val) => {
-  try {
-    const str = typeof val === 'string' ? val : JSON.stringify(val);
-    localStorage.setItem(key, LZString.compressToUTF16(str));
-  } catch(e) {}
-};
-const lsGet = (key) => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return null;
-    const dec = LZString.decompressFromUTF16(raw);
-    return (dec !== null && dec !== '') ? dec : raw;
-  } catch(e) { return null; }
-};
-// ─────────────────────────────────────────────────────────────────────────────
+import { lsGet, lsSet } from './utils/storage.js';
+import { TW_FT, TH_FT, SNAP_FT, MAX_HIST } from './data/constants.js';
+import { CAT_COLORS, DEFAULT_CAT_COLOR, catColor } from './data/categories.js';
+import { VENDORS, vendorFromName, stripVendorPrefix, isUtilityItem } from './data/vendors.js';
+import { TRUCK_STATUS_CYCLE, TRUCK_STATUS_CONFIG, getTruckStatus } from './data/truckStatus.js';
+import { DEFAULT_LIBRARY } from './data/library.js';
+import { CASE_TYPE_MAP } from './data/caseTypes.js';
+import { MONTHS_SHORT, fmtDDMMMYYYY } from './utils/dates.js';
+import { lightenHex } from './utils/colors.js';
+import { getTruckPrefix, getManifestNum, LAYER_PLACEHOLDERS, LAYER_COLOR_LABELS, getLayerInfo } from './utils/manifest.js';
 
 const { useState, useRef, useEffect, useCallback } = React;
 
-// ── Real-dimension constants ───────────────────────────────────────────────────
-const TW_FT = 53, TH_FT = 8.5, SNAP_FT = 1/6, MAX_HIST = 30;
-
-// ── Category colors ───────────────────────────────────────────────────────────
-const CAT_COLORS = {
-  'General':       { hex:'#455A64', tc:'#fff' },
-  'Truss':         { hex:'#90A4AE', tc:'#000' },
-  'Motors':        { hex:'#1F3864', tc:'#fff' },
-  'Motor Pack':    { hex:'#1F3864', tc:'#fff' }, // legacy alias for Motors
-  'Road Case':     { hex:'#1E88E5', tc:'#fff' },
-  'Fixtures':      { hex:'#FDD835', tc:'#000' },
-  'Workbox':       { hex:'#FB8C00', tc:'#000' },
-  'Dimmer/Distro': { hex:'#E53935', tc:'#fff' },
-  'Cable':         { hex:'#5D4037', tc:'#fff' },
-  'Rigging':       { hex:'#37474F', tc:'#fff' },
-  'Audio':         { hex:'#6A1B9A', tc:'#fff' },
-  'Video':         { hex:'#1565C0', tc:'#fff' },
-  'Lighting':      { hex:'#F57F17', tc:'#000' },
-  'Other':         { hex:'#78909C', tc:'#fff' },
-};
-const DEFAULT_CAT_COLOR = { hex:'#546E7A', tc:'#fff' };
-const catColor = (cat) => CAT_COLORS[cat] || DEFAULT_CAT_COLOR;
-
-// ── Vendor prefixes ───────────────────────────────────────────────────────────
-const VENDORS = ['CL', '4W', 'PRG', 'CT'];
-const vendorFromName = name => { for(const v of VENDORS) if(name.startsWith(v+' ')) return v; return null; };
-const stripVendorPrefix = name => { for(const v of VENDORS) if(name.startsWith(v+' ')) return name.slice(v.length+1); return name; };
-const isUtilityItem = item => (item?.cat||'').toLowerCase() === 'general';
-
-// JULIE_ENDPOINT removed — JULIE bot will read directly from Firestore
-
+// Truck-status broadcast templates — used by the dispatch quick-status pills
+// in the packer toolbar. Each pill posts a Slack-style message to a webhook
+// when clicked.
 const CHAT_MSG_TEMPLATES = [
   {key:'staged',     icon:'🔵', label:'Is Staged',        text: id=>`${id} IS STAGED`,          color:'#448aff', bg:'rgba(68,138,255,.12)', border:'rgba(68,138,255,.4)'},
   {key:'loaded',     icon:'🟢', label:'Has Been Loaded',  text: id=>`${id} HAS BEEN LOADED`,    color:'#43A047', bg:'rgba(67,160,71,.12)',  border:'rgba(67,160,71,.4)'},
@@ -59,142 +21,6 @@ const CHAT_MSG_TEMPLATES = [
   {key:'backloaded', icon:'🟠', label:'Is Backloaded',    text: id=>`${id} IS BACKLOADED`,      color:'#FF9800', bg:'rgba(255,152,0,.12)',  border:'rgba(255,152,0,.4)'},
   {key:'empty',      icon:'🔴', label:'Is Empty',         text: id=>`${id} IS EMPTY`,           color:'#E53935', bg:'rgba(229,57,53,.12)',  border:'rgba(229,57,53,.4)'},
 ];
-const TRUCK_STATUS_CYCLE  = ['staged','atdock','loaded','unloaded','backloaded','empty'];
-const TRUCK_STATUS_CONFIG = {
-  staged:     {label:'▶ Staged',     color:'#448aff', border:'rgba(68,138,255,.5)',  bg:'rgba(68,138,255,.15)',  rowBg:'rgba(68,138,255,.07)'},
-  atdock:     {label:'⬇ At Dock',    color:'#CE93D8', border:'rgba(206,147,216,.5)', bg:'rgba(206,147,216,.15)', rowBg:'rgba(206,147,216,.06)'},
-  loaded:     {label:'✓ Loaded',     color:'#43A047', border:'rgba(67,160,71,.5)',   bg:'rgba(67,160,71,.15)',   rowBg:'rgba(67,160,71,.07)'},
-  unloaded:   {label:'○ Unloaded',   color:'#e6c200', border:'rgba(230,194,0,.5)',   bg:'rgba(253,216,53,.12)',  rowBg:'rgba(253,216,53,.05)'},
-  backloaded: {label:'↩ Backloaded', color:'#FF9800', border:'rgba(255,152,0,.5)',   bg:'rgba(255,152,0,.13)',   rowBg:'rgba(255,152,0,.06)'},
-  empty:      {label:'✕ Empty',      color:'#E53935', border:'rgba(229,57,53,.5)',   bg:'rgba(229,57,53,.13)',   rowBg:'rgba(229,57,53,.06)'},
-};
-const getTruckStatus = li => {
-  if (!li) return null;
-  if (li.status) return li.status;
-  if (li.loaded) return 'loaded'; // backward compat
-  return null;
-};
-
-// ── Default library (feet) ─────────────────────────────────────────────────────
-const DEFAULT_LIBRARY = [
-  // General utilities (no vendor prefix)
-  { name:"TRUCK STRAP",                          cat:"General",       w:0.1,  h:8     },
-  { name:"LOAD BAR",                             cat:"General",       w:0.2,  h:8     },
-  // Christie Lites — Truss
-  { name:"CL F-TYPE 4'",                         cat:"Truss",         w:4,    h:2     },
-  { name:"CL F-TYPE 8'",                         cat:"Truss",         w:8,    h:2     },
-  { name:"CL F-TYPE 16'",                        cat:"Truss",         w:16,   h:2     },
-  { name:"CL F-TYPE 20'",                        cat:"Truss",         w:20,   h:2     },
-  { name:"CL F-TYPE 24'",                        cat:"Truss",         w:24,   h:2     },
-  { name:"CL B-TYPE DOLLY HALF",                 cat:"Truss",         w:4,    h:2.66  },
-  { name:"CL B-TYPE DOLLY",                      cat:"Truss",         w:8,    h:2.66  },
-  // Christie Lites — Motors
-  { name:"CL MTR CUBE",                          cat:"Motors",        w:2,    h:2     },
-  { name:"CL MTR S2W",                           cat:"Motors",        w:4,    h:2     },
-  // Christie Lites — Road Case
-  { name:"CL S2W",                               cat:"Road Case",     w:4,    h:2     },
-  { name:"CL S3W",                               cat:"Road Case",     w:4,    h:2     },
-  { name:"CL S4W",                               cat:"Road Case",     w:4,    h:2     },
-  { name:"CL T2W",                               cat:"Road Case",     w:4,    h:2.5   },
-  { name:"CL UTIL CUBE",                         cat:"Road Case",     w:2,    h:2     },
-  { name:"CL DOLLY 5FT LAMP RACK ADJUSTABLE",    cat:"Road Case",     w:2.5,  h:5.08  },
-  { name:"CL DOLLY 7.5FT LAMP RACK ADJUSTABLE",  cat:"Road Case",     w:2.5,  h:7.58  },
-  { name:"CL CART PIPE",                         cat:"Road Case",     w:2,    h:4     },
-  { name:"CL CART TRUSS BASE CART 3X3",          cat:"Road Case",     w:2,    h:4     },
-  { name:"CL CASE BOLT",                         cat:"Road Case",     w:0.67, h:1.25  },
-  { name:"CL CASE MA ONPC",                      cat:"Road Case",     w:1.08, h:2.17  },
-  { name:"CL CASE MA2 FULL-SIZE CONSOLE",        cat:"Road Case",     w:1,    h:4.5   },
-  { name:"CL CASE MA2 LIGHT/ULTRA LIGHT CONSOLE",cat:"Road Case",     w:1,    h:4     },
-  { name:"CL CASE MA3 LIGHT CONSOLE",            cat:"Road Case",     w:1.33, h:3.25  },
-  { name:"CL CASE MONITOR 22IN X 2",             cat:"Road Case",     w:1,    h:2     },
-  // Christie Lites — Fixtures
-  { name:"CL S2W FIXTURE CASE",                  cat:"Fixtures",      w:4,    h:2     },
-  { name:"CL 4-WAY TALL",                        cat:"Fixtures",      w:4,    h:2     },
-  { name:"CL 8-WAY TALL",                        cat:"Fixtures",      w:4,    h:2     },
-  { name:"CL TALL FIXTURE CASE",                 cat:"Fixtures",      w:4,    h:2     },
-  { name:"CL FIXTURE CART",                      cat:"Fixtures",      w:4,    h:2     },
-  { name:"CL CF FIXTURE CASE",                   cat:"Fixtures",      w:6,    h:2     },
-  // Christie Lites — Cable
-  { name:"CL T2W CABLE",                         cat:"Cable",         w:4,    h:2.5   },
-  { name:"CL FISH TOTE",                         cat:"Cable",         w:3.67, h:4     },
-  // Christie Lites — Dimmer/Distro
-  { name:"CL FULL DISTRO",                       cat:"Dimmer/Distro", w:2,    h:2.5   },
-  { name:"CL HALF DISTRO",                       cat:"Dimmer/Distro", w:2,    h:2.5   },
-  // Christie Lites — Workbox
-  { name:"CL WORKBOX",                           cat:"Workbox",       w:2,    h:2.67  },
-  // Christie Lites — Other
-  { name:"CL MAC ONE CART",                      cat:"Other",         w:21,   h:2.66  },
-  // Other vendors (no CL/4W/PRG/CT prefix)
-  { name:"RANDO 12\" TRUSS CART",                cat:"Truss",         w:8,    h:2     },
-  { name:"VOLUX PHYSOS SMALL",                   cat:"Fixtures",      w:2.24, h:2.25  },
-  { name:"VOLUX PHYSOS LARGE",                   cat:"Fixtures",      w:3.5,  h:2.17  },
-].map(x => ({ ...x, ...catColor(x.cat) }));
-
-// ── Date formatter ────────────────────────────────────────────────────────────
-const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-const fmtDDMMMYYYY = d => {
-  if(!d || isNaN(d.getTime())) return '';
-  return `${String(d.getDate()).padStart(2,'0')}-${MONTHS_SHORT[d.getMonth()].toUpperCase()}-${d.getFullYear()}`;
-};
-
-// ── Manifest number helpers ───────────────────────────────────────────────
-const getTruckPrefix = (truckId) => {
-  if (!truckId) return '?';
-  const m = truckId.match(/^([A-Za-z]+)(\d+)$/);
-  if (!m) return truckId;
-  const [, letters, num] = m;
-  return letters.toUpperCase() === 'FAV' ? num : letters.charAt(0).toUpperCase() + num;
-};
-const lightenHex = (hex, amount = 0.52) => {
-  if (!hex || hex === 'glass') return 'rgba(255,255,255,0.55)';
-  try {
-    const h = hex.replace('#','');
-    const r = parseInt(h.slice(0,2),16), g = parseInt(h.slice(2,4),16), b = parseInt(h.slice(4,6),16);
-    return `rgb(${Math.round(r+(255-r)*amount)},${Math.round(g+(255-g)*amount)},${Math.round(b+(255-b)*amount)})`;
-  } catch(e) { return 'rgba(255,255,255,0.55)'; }
-};
-const getManifestNum = (truckId, itemId) => `${getTruckPrefix(truckId)}-${itemId}`;
-
-// ── Per-layer (stacking) helpers ─────────────────────────────────────────
-const LAYER_PLACEHOLDERS = [
-  ['[LABEL]'],
-  ['[LABEL]', '[LABEL]'],
-  ['[LABEL]', '[LABEL]', '[LABEL]'],
-];
-const LAYER_COLOR_LABELS = [
-  ['Color:'],
-  ['Top Color:', 'Bottom Color:'],
-  ['Top Color:', 'Mid Color:', 'Bottom Color:'],
-];
-const getLayerInfo = (p, li) => ({
-  label:    p.layerLabels?.[li]    ?? (li === 0 ? (p.label || '') : ''),
-  hex:      p.layerHex?.[li]       ?? (li === 0 ? (p.customHex || 'glass') : 'glass'),
-  tc:       p.layerTc?.[li]        ?? (li === 0 ? (p.customTc  || '#fff')  : '#fff'),
-  caseType: p.layerCaseTypes?.[li] ?? '',
-});
-
-// Case type → library item name mapping
-const CASE_TYPE_MAP = {
-  'CF72':  'CL CF FIXTURE CASE',
-  'DOLLY': 'CL DOLLY TRUSS',
-  'FTYPE': "TRUSS 8'",
-  'HYP':   'CL DOLLY 5FT LAMP RACK ADJUSTABLE',
-  'LYRA':  'CL FIXTURE CART',
-  'MON':   'CL CASE MONITOR 22IN X 2',
-  'PXL':   'CL TALL FIXTURE CASE',
-  'QUA':   'CL TALL FIXTURE CASE',
-  'RACK':  'CL FULL DISTRO',
-  'S2W':   'CL S2W',
-  'S3W':   'CL S3W',
-  'S4W':   'CL S4W',
-  'T2W':   'CL T2W',
-  'ULTRA': 'CL FIXTURE CART',
-  'VOL':   'VOLUX PHYSOS LARGE',
-  'WORK':  'CL WORKBOX',
-  'XIP':   'CL FIXTURE CART',
-  'ZW37':  'CL S2W FIXTURE CASE',
-};
-
 
 // ── Auto Pack Beta — control barcodes (scan to change settings) ──────────────
 const AP_CONTROL_CODES = {
