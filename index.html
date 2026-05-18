@@ -1786,7 +1786,6 @@ function App() {
         setTruckDock({});
         setTruckMeta({});
         setActivityLog([]);
-        setCases({});
         setEventName('');
 
         // ── Truck layouts ────────────────────────────────────────────────
@@ -2280,7 +2279,7 @@ function App() {
 
   const sortedTruckIds = Object.keys(trucks).sort((a,b)=>{ const p=s=>{const m=s.match(/^([A-Za-z]*)(\d+)$/);return m?[m[1].toUpperCase(),parseInt(m[2],10)]:[s,0];}; const[aL,aN]=p(a),[bL,bN]=p(b);return aL!==bL?aL.localeCompare(bL):aN-bN; });
   const effectiveCurId = trucks[curId] ? curId : (sortedTruckIds[0] || null);
-  const truck = effectiveCurId ? trucks[effectiveCurId] : { placed:{}, info:emptyTruckInfo(''), history:[] };
+  const truck = effectiveCurId ? trucks[effectiveCurId] : { placed:{}, info:emptyTruckInfo(''), history:[], counter:1, scans:[] };
   const { placed, info, history } = truck;
   const truckIdx = sortedTruckIds.indexOf(effectiveCurId);
 
