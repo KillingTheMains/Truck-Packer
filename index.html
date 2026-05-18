@@ -1597,6 +1597,15 @@ function App() {
   const [editingLoadTotal, setEditingLoadTotal] = useState(false); // inline edit mode for the total
   const [newEventModal, setNewEventModal] = useState(false);
   const [newEventNameInput, setNewEventNameInput] = useState('');
+  // Truck modal state (add single / add bulk / rename)
+  const [truckModal, setTruckModal] = useState(null); // null | {mode:'add'|'bulk'|'rename', renameId?:string}
+  const [truckModalSingle, setTruckModalSingle] = useState('');
+  const [truckModalPrefix, setTruckModalPrefix] = useState('');
+  const [truckModalRangeStart, setTruckModalRangeStart] = useState('1');
+  const [truckModalRangeEnd, setTruckModalRangeEnd] = useState('10');
+  const [truckModalPaste, setTruckModalPaste] = useState('');
+  const [truckModalRenameNew, setTruckModalRenameNew] = useState('');
+  const [truckModalBusy, setTruckModalBusy] = useState(false);
   const canvasRef    = useRef(null);
   const trailerRef   = useRef(null);
   const placedListRef = useRef(null);
@@ -3161,20 +3170,129 @@ function App() {
     setTlAddId('');
   };
 
-  const addTruck = () => {
-    const raw = window.prompt('New truck ID (e.g. T1, AMS1, FAV5):');
-    if (raw === null) return;
-    const id = raw.trim().toUpperCase();
-    if (!id) return;
-    if (trucks[id]) { alert(`Truck "${id}" already exists.`); return; }
+  // ── Truck Modal: unified add / bulk / rename ────────────────────────────
+  const openTruckModal = (mode='add', renameId='') => {
+    setTruckModal({ mode, renameId });
+    setTruckModalSingle('');
+    setTruckModalPrefix(mode==='add' && Object.keys(trucks).length > 0 ? '' : '');
+    setTruckModalRangeStart('1');
+    setTruckModalRangeEnd('10');
+    setTruckModalPaste('');
+    setTruckModalRenameNew(renameId);
+    setTruckModalBusy(false);
+  };
+
+  // Write one new layout doc + state for a given ID. Returns true on success.
+  const _createOneTruck = async (id) => {
+    if (trucks[id]) return false;
     const newTruck = { placed:{}, info:emptyTruckInfo(id), history:[], counter:1, scans:[] };
     setTrucks(prev => ({...prev, [id]: newTruck}));
-    setCurId(id); lsSet('truckPacker_curId', id);
-    evtCol('layouts').doc(id).set({
-      placed: {}, counter: 1, scans: [], info: emptyTruckInfo(id),
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    }).catch(e => alert(`Failed to add truck: ${e.message}`));
-    addHistoryEntry('ADD', id, '', `${id} added to fleet`);
+    try {
+      await evtCol('layouts').doc(id).set({
+        placed: {}, counter: 1, scans: [], info: emptyTruckInfo(id),
+        updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+      addHistoryEntry('ADD', id, '', `${id} added to fleet`);
+      return true;
+    } catch(e) {
+      console.warn('[FS] add truck failed:', id, e.message);
+      return false;
+    }
+  };
+
+  const submitTruckModalAdd = async () => {
+    const id = truckModalSingle.trim().toUpperCase();
+    if (!id) return;
+    if (trucks[id]) { alert(`Truck "${id}" already exists.`); return; }
+    setTruckModalBusy(true);
+    const ok = await _createOneTruck(id);
+    setTruckModalBusy(false);
+    if (ok) { setCurId(id); lsSet('truckPacker_curId', id); setTruckModal(null); }
+    else { alert(`Failed to add truck "${id}".`); }
+  };
+
+  // Parse the bulk modal into a deduped list of truck IDs.
+  // Supports range (PREFIX + N1..N2) OR paste (one ID per line, commas allowed).
+  const _parseBulkIds = () => {
+    const out = [];
+    const pasteRaw = truckModalPaste.trim();
+    if (pasteRaw) {
+      pasteRaw.split(/[\n,]+/).forEach(s => {
+        const id = s.trim().toUpperCase();
+        if (id && !out.includes(id)) out.push(id);
+      });
+    } else {
+      const prefix = truckModalPrefix.trim().toUpperCase();
+      const n1 = parseInt(truckModalRangeStart, 10);
+      const n2 = parseInt(truckModalRangeEnd, 10);
+      if (isNaN(n1) || isNaN(n2)) return [];
+      const [lo, hi] = n1 <= n2 ? [n1, n2] : [n2, n1];
+      for (let i = lo; i <= hi; i++) out.push(`${prefix}${i}`);
+    }
+    return out;
+  };
+
+  const submitTruckModalBulk = async () => {
+    const ids = _parseBulkIds();
+    if (!ids.length) { alert('Nothing to add — enter a range or paste IDs.'); return; }
+    const conflicts = ids.filter(id => trucks[id]);
+    if (conflicts.length === ids.length) {
+      alert(`All ${ids.length} truck${ids.length>1?'s':''} already exist.`);
+      return;
+    }
+    const fresh = ids.filter(id => !trucks[id]);
+    if (conflicts.length && !window.confirm(`${conflicts.length} truck${conflicts.length>1?'s':''} already exist and will be skipped. Add the remaining ${fresh.length}?`)) return;
+    setTruckModalBusy(true);
+    let added = 0;
+    for (const id of fresh) { if (await _createOneTruck(id)) added++; }
+    setTruckModalBusy(false);
+    setTruckModal(null);
+    if (added > 0 && !curId) { setCurId(fresh[0]); lsSet('truckPacker_curId', fresh[0]); }
+  };
+
+  // Rename: copy layout + meta + status to the new ID, then delete the old.
+  const submitTruckModalRename = async () => {
+    const oldId = truckModal?.renameId;
+    const newId = truckModalRenameNew.trim().toUpperCase();
+    if (!oldId || !newId) return;
+    if (newId === oldId) { setTruckModal(null); return; }
+    if (trucks[newId]) { alert(`Truck "${newId}" already exists.`); return; }
+    setTruckModalBusy(true);
+    try {
+      // Read existing Firestore docs so we can copy them under the new ID.
+      const [layoutDoc, metaDoc, statusDoc] = await Promise.all([
+        evtCol('layouts').doc(oldId).get(),
+        evtCol('meta').doc(oldId).get(),
+        evtCol('status').doc(oldId).get(),
+      ]);
+      const batch = db.batch();
+      if (layoutDoc.exists) {
+        batch.set(evtCol('layouts').doc(newId), { ...layoutDoc.data(), updatedAt: firebase.firestore.FieldValue.serverTimestamp() });
+        batch.delete(evtCol('layouts').doc(oldId));
+      }
+      if (metaDoc.exists) {
+        batch.set(evtCol('meta').doc(newId), metaDoc.data());
+        batch.delete(evtCol('meta').doc(oldId));
+      }
+      if (statusDoc.exists) {
+        batch.set(evtCol('status').doc(newId), statusDoc.data());
+        batch.delete(evtCol('status').doc(oldId));
+      }
+      await batch.commit();
+      // Migrate React state across maps that are keyed by truckId.
+      const moveKey = (obj) => { const n = {...obj}; if (oldId in n) { n[newId] = n[oldId]; delete n[oldId]; } return n; };
+      setTrucks(moveKey);
+      setTruckLoaded(moveKey);
+      setTruckDock(moveKey);
+      setTruckNotes(moveKey);
+      setTruckMeta(moveKey);
+      if (curId === oldId) { setCurId(newId); lsSet('truckPacker_curId', newId); }
+      addHistoryEntry('RENAME', newId, '', `${oldId} renamed to ${newId}`);
+      setTruckModal(null);
+    } catch(e) {
+      alert(`Rename failed: ${e.message}`);
+    }
+    setTruckModalBusy(false);
   };
 
   const deleteTrailer = (tid) => {
@@ -3693,7 +3811,95 @@ function App() {
     );
   }
 
+  // ── Truck modal (add / bulk add / rename) ────────────────────────────────
+  const renderTruckModal = () => {
+    if (!truckModal) return null;
+    const { mode, renameId } = truckModal;
+    const close = () => !truckModalBusy && setTruckModal(null);
+    const tab = (k, label) => (
+      <button key={k} onClick={()=>setTruckModal(prev=>({...prev, mode:k}))}
+        style={{flex:1, padding:'7px 0', fontSize:11, fontWeight:'bold', letterSpacing:'.06em',
+          background: mode===k ? '#1a3a5a' : 'transparent', color: mode===k ? '#90cfff' : '#557',
+          border:'none', borderBottom: mode===k ? '2px solid #4a8aaa' : '2px solid transparent',
+          cursor:'pointer'}}>{label}</button>
+    );
+    const previewIds = mode==='bulk' ? _parseBulkIds() : [];
+    return (
+      <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.75)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:200}}
+           onClick={close}>
+        <div onClick={e=>e.stopPropagation()}
+             style={{background:'#0d1e33',border:'1px solid #1a3a5a',borderRadius:8,padding:0,width:460,maxWidth:'95vw'}}>
+          <div style={{padding:'14px 20px 0',fontSize:13,fontWeight:'bold',color:'#90A4AE',letterSpacing:'.06em'}}>
+            {mode==='rename' ? `RENAME TRUCK — ${renameId}` : 'ADD TRUCK'}
+          </div>
+          {mode!=='rename' && (
+            <div style={{display:'flex',marginTop:12,borderBottom:'1px solid #1a3a5a'}}>
+              {tab('add','Single')}
+              {tab('bulk','Bulk')}
+            </div>
+          )}
+          <div style={{padding:'18px 20px 16px'}}>
+            {mode==='add' && (
+              <div>
+                <div style={{fontSize:10,color:'#445',textTransform:'uppercase',marginBottom:4}}>Truck ID</div>
+                <input autoFocus value={truckModalSingle}
+                  onChange={e=>setTruckModalSingle(e.target.value)}
+                  onKeyDown={e=>{ if(e.key==='Enter') submitTruckModalAdd(); if(e.key==='Escape') close(); }}
+                  placeholder="e.g. T1, AMS1, FAV5"
+                  style={{width:'100%',background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#ccc',fontSize:13,padding:'7px 10px',outline:'none',boxSizing:'border-box',textTransform:'uppercase'}}/>
+              </div>
+            )}
+            {mode==='bulk' && (
+              <div>
+                <div style={{fontSize:10,color:'#445',textTransform:'uppercase',marginBottom:4}}>Range (prefix + numbers)</div>
+                <div style={{display:'flex',gap:6,alignItems:'center',marginBottom:14}}>
+                  <input value={truckModalPrefix} onChange={e=>setTruckModalPrefix(e.target.value)}
+                    placeholder="prefix (e.g. T, FAV)"
+                    style={{flex:2,background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#ccc',fontSize:13,padding:'7px 10px',outline:'none',boxSizing:'border-box',textTransform:'uppercase'}}/>
+                  <input value={truckModalRangeStart} onChange={e=>setTruckModalRangeStart(e.target.value)} type="number" min="0"
+                    style={{flex:1,background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#7cf',fontSize:13,padding:'7px 10px',outline:'none',boxSizing:'border-box'}}/>
+                  <span style={{color:'#445',fontSize:14}}>–</span>
+                  <input value={truckModalRangeEnd} onChange={e=>setTruckModalRangeEnd(e.target.value)} type="number" min="0"
+                    style={{flex:1,background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#7cf',fontSize:13,padding:'7px 10px',outline:'none',boxSizing:'border-box'}}/>
+                </div>
+                <div style={{fontSize:10,color:'#445',textTransform:'uppercase',marginBottom:4}}>Or paste IDs (one per line — overrides range)</div>
+                <textarea value={truckModalPaste} onChange={e=>setTruckModalPaste(e.target.value)}
+                  placeholder={'T1\nT2\nAMS1\nFAV5'}
+                  rows={5}
+                  style={{width:'100%',background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#ccc',fontSize:12,padding:'7px 10px',outline:'none',boxSizing:'border-box',fontFamily:'monospace',resize:'vertical'}}/>
+                <div style={{fontSize:10,color:previewIds.length?'#81c784':'#445',marginTop:6}}>
+                  {previewIds.length ? `Will add ${previewIds.length}: ${previewIds.slice(0,10).join(', ')}${previewIds.length>10?', …':''}` : 'Enter a range or paste IDs'}
+                </div>
+              </div>
+            )}
+            {mode==='rename' && (
+              <div>
+                <div style={{fontSize:10,color:'#445',textTransform:'uppercase',marginBottom:4}}>New Truck ID</div>
+                <input autoFocus value={truckModalRenameNew}
+                  onChange={e=>setTruckModalRenameNew(e.target.value)}
+                  onKeyDown={e=>{ if(e.key==='Enter') submitTruckModalRename(); if(e.key==='Escape') close(); }}
+                  style={{width:'100%',background:'#0a1525',border:'1px solid #2a3a5a',borderRadius:4,color:'#ccc',fontSize:13,padding:'7px 10px',outline:'none',boxSizing:'border-box',textTransform:'uppercase'}}/>
+                <div style={{fontSize:10,color:'#667',marginTop:8}}>Scans, status, dock, and layout will be preserved.</div>
+              </div>
+            )}
+          </div>
+          <div style={{display:'flex',gap:8,justifyContent:'flex-end',padding:'0 20px 16px'}}>
+            <button onClick={close} disabled={truckModalBusy}
+              style={{padding:'6px 14px',background:'transparent',border:'1px solid #2a3a5a',borderRadius:4,color:'#778',fontSize:11,cursor:'pointer'}}>CANCEL</button>
+            <button
+              onClick={mode==='rename'?submitTruckModalRename:mode==='bulk'?submitTruckModalBulk:submitTruckModalAdd}
+              disabled={truckModalBusy || (mode==='add' && !truckModalSingle.trim()) || (mode==='bulk' && !previewIds.length) || (mode==='rename' && (!truckModalRenameNew.trim() || truckModalRenameNew.trim().toUpperCase()===renameId))}
+              style={{padding:'6px 14px',background:'#1F3864',border:'1px solid #2a6aaa',borderRadius:4,color:'#90cfff',fontSize:11,fontWeight:'bold',cursor:'pointer'}}>
+              {truckModalBusy ? '…' : mode==='rename' ? 'RENAME' : mode==='bulk' ? `ADD ${previewIds.length || ''}` : 'ADD'}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (<>
+    {renderTruckModal()}
     {/* ── Loading overlay (shown until Apps Script data loads) ── */}
     {!appLoaded && (
       <div className="app-loader">
@@ -5606,9 +5812,13 @@ function App() {
                         🔄 <strong>{totalLoads}</strong> total loads
                       </span>
                   }
-                  <button onClick={addTruck}
+                  <button onClick={()=>openTruckModal('add')}
                     style={{fontSize:10,padding:'2px 9px',background:'rgba(129,199,132,.12)',border:'1px solid rgba(129,199,132,.4)',borderRadius:4,color:'#81c784',cursor:'pointer',whiteSpace:'nowrap',fontWeight:'bold'}}>
                     ＋ Add Truck
+                  </button>
+                  <button onClick={()=>openTruckModal('bulk')}
+                    style={{fontSize:10,padding:'2px 9px',background:'rgba(129,199,132,.08)',border:'1px solid rgba(129,199,132,.3)',borderRadius:4,color:'#81c784',cursor:'pointer',whiteSpace:'nowrap'}}>
+                    ＋＋ Bulk Add
                   </button>
                   <button onClick={()=>{setNewEventNameInput('');setNewEventModal(true);}}
                     style={{fontSize:10,padding:'2px 9px',background:'rgba(144,196,255,.1)',border:'1px solid rgba(144,196,255,.3)',borderRadius:4,color:'#90cfff',cursor:'pointer',whiteSpace:'nowrap'}}>
@@ -5780,6 +5990,7 @@ function App() {
                                 onMouseEnter={e=>{e.currentTarget.style.background='rgba(68,138,255,.15)';e.currentTarget.style.color='#90cfff';e.currentTarget.style.borderColor='rgba(68,138,255,.7)';}}
                                 onMouseLeave={e=>{e.currentTarget.style.background='none';e.currentTarget.style.color='rgba(100,180,255,.6)';e.currentTarget.style.borderColor='rgba(68,138,255,.3)';}}
                               >↗</button>
+                              <button className="tl-del-btn" onClick={()=>openTruckModal('rename', tid)} title={`Rename ${tid}`} style={{color:'rgba(144,196,255,.7)',borderColor:'rgba(68,138,255,.3)'}}>✎</button>
                               <button className="tl-del-btn" onClick={()=>deleteTrailer(tid)} title={`Remove ${tid} from list`}>✕</button>
                             </div>
                           </td>
