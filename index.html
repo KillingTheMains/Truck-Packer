@@ -700,9 +700,12 @@ const TW_FT = 53, TH_FT = 8.5, SNAP_FT = 1/6, MAX_HIST = 30;
 
 // ── Category colors ───────────────────────────────────────────────────────────
 const CAT_COLORS = {
+  'General':       { hex:'#455A64', tc:'#fff' },
   'Truss':         { hex:'#90A4AE', tc:'#000' },
-  'Motor Pack':    { hex:'#1F3864', tc:'#fff' },
+  'Motors':        { hex:'#1F3864', tc:'#fff' },
+  'Motor Pack':    { hex:'#1F3864', tc:'#fff' }, // legacy alias for Motors
   'Road Case':     { hex:'#1E88E5', tc:'#fff' },
+  'Fixtures':      { hex:'#FDD835', tc:'#000' },
   'Workbox':       { hex:'#FB8C00', tc:'#000' },
   'Dimmer/Distro': { hex:'#E53935', tc:'#fff' },
   'Cable':         { hex:'#5D4037', tc:'#fff' },
@@ -710,6 +713,7 @@ const CAT_COLORS = {
   'Audio':         { hex:'#6A1B9A', tc:'#fff' },
   'Video':         { hex:'#1565C0', tc:'#fff' },
   'Lighting':      { hex:'#F57F17', tc:'#000' },
+  'Other':         { hex:'#78909C', tc:'#fff' },
 };
 const DEFAULT_CAT_COLOR = { hex:'#546E7A', tc:'#fff' };
 const catColor = (cat) => CAT_COLORS[cat] || DEFAULT_CAT_COLOR;
@@ -747,19 +751,57 @@ const getTruckStatus = li => {
 
 // ── Default library (feet) ─────────────────────────────────────────────────────
 const DEFAULT_LIBRARY = [
-  { name:"TRUSS 4'",           cat:"Truss",        w:4,   h:1.5  },
-  { name:"TRUSS 8'",           cat:"Truss",        w:8,   h:1.5  },
-  { name:"TRUSS 8' 90°",       cat:"Truss",        w:1.5, h:8    },
-  { name:"TRUSS 16'",          cat:"Truss",        w:16,  h:1.5  },
-  { name:"TRUSS 24'",          cat:"Truss",        w:24,  h:1.5  },
-  { name:"MOTOR CUBE",         cat:"Motor Pack",   w:3,   h:1.5  },
-  { name:"MOTOR S2W",          cat:"Motor Pack",   w:4,   h:1.5  },
-  { name:"MOTOR S2W 90°",      cat:"Motor Pack",   w:1.5, h:4    },
-  { name:"ROAD CASE S2W",      cat:"Road Case",    w:4,   h:1.5  },
-  { name:"ROAD CASE FIXTURES", cat:"Road Case",    w:4,   h:1.5  },
-  { name:"ROAD CASE T2W",      cat:"Road Case",    w:5,   h:2    },
-  { name:"WORKBOX",            cat:"Workbox",      w:3,   h:1.5  },
-  { name:"POWER/DATA RACK",    cat:"Dimmer/Distro",w:3,   h:1.5  },
+  // General utilities (no vendor prefix)
+  { name:"TRUCK STRAP",                          cat:"General",       w:0.1,  h:8     },
+  { name:"LOAD BAR",                             cat:"General",       w:0.2,  h:8     },
+  // Christie Lites — Truss
+  { name:"CL F-TYPE 4'",                         cat:"Truss",         w:4,    h:2     },
+  { name:"CL F-TYPE 8'",                         cat:"Truss",         w:8,    h:2     },
+  { name:"CL F-TYPE 16'",                        cat:"Truss",         w:16,   h:2     },
+  { name:"CL F-TYPE 20'",                        cat:"Truss",         w:20,   h:2     },
+  { name:"CL F-TYPE 24'",                        cat:"Truss",         w:24,   h:2     },
+  { name:"CL B-TYPE DOLLY HALF",                 cat:"Truss",         w:4,    h:2.66  },
+  { name:"CL B-TYPE DOLLY",                      cat:"Truss",         w:8,    h:2.66  },
+  // Christie Lites — Motors
+  { name:"CL MTR CUBE",                          cat:"Motors",        w:2,    h:2     },
+  { name:"CL MTR S2W",                           cat:"Motors",        w:4,    h:2     },
+  // Christie Lites — Road Case
+  { name:"CL S2W",                               cat:"Road Case",     w:4,    h:2     },
+  { name:"CL S3W",                               cat:"Road Case",     w:4,    h:2     },
+  { name:"CL S4W",                               cat:"Road Case",     w:4,    h:2     },
+  { name:"CL T2W",                               cat:"Road Case",     w:4,    h:2.5   },
+  { name:"CL UTIL CUBE",                         cat:"Road Case",     w:2,    h:2     },
+  { name:"CL DOLLY 5FT LAMP RACK ADJUSTABLE",    cat:"Road Case",     w:2.5,  h:5.08  },
+  { name:"CL DOLLY 7.5FT LAMP RACK ADJUSTABLE",  cat:"Road Case",     w:2.5,  h:7.58  },
+  { name:"CL CART PIPE",                         cat:"Road Case",     w:2,    h:4     },
+  { name:"CL CART TRUSS BASE CART 3X3",          cat:"Road Case",     w:2,    h:4     },
+  { name:"CL CASE BOLT",                         cat:"Road Case",     w:0.67, h:1.25  },
+  { name:"CL CASE MA ONPC",                      cat:"Road Case",     w:1.08, h:2.17  },
+  { name:"CL CASE MA2 FULL-SIZE CONSOLE",        cat:"Road Case",     w:1,    h:4.5   },
+  { name:"CL CASE MA2 LIGHT/ULTRA LIGHT CONSOLE",cat:"Road Case",     w:1,    h:4     },
+  { name:"CL CASE MA3 LIGHT CONSOLE",            cat:"Road Case",     w:1.33, h:3.25  },
+  { name:"CL CASE MONITOR 22IN X 2",             cat:"Road Case",     w:1,    h:2     },
+  // Christie Lites — Fixtures
+  { name:"CL S2W FIXTURE CASE",                  cat:"Fixtures",      w:4,    h:2     },
+  { name:"CL 4-WAY TALL",                        cat:"Fixtures",      w:4,    h:2     },
+  { name:"CL 8-WAY TALL",                        cat:"Fixtures",      w:4,    h:2     },
+  { name:"CL TALL FIXTURE CASE",                 cat:"Fixtures",      w:4,    h:2     },
+  { name:"CL FIXTURE CART",                      cat:"Fixtures",      w:4,    h:2     },
+  { name:"CL CF FIXTURE CASE",                   cat:"Fixtures",      w:6,    h:2     },
+  // Christie Lites — Cable
+  { name:"CL T2W CABLE",                         cat:"Cable",         w:4,    h:2.5   },
+  { name:"CL FISH TOTE",                         cat:"Cable",         w:3.67, h:4     },
+  // Christie Lites — Dimmer/Distro
+  { name:"CL FULL DISTRO",                       cat:"Dimmer/Distro", w:2,    h:2.5   },
+  { name:"CL HALF DISTRO",                       cat:"Dimmer/Distro", w:2,    h:2.5   },
+  // Christie Lites — Workbox
+  { name:"CL WORKBOX",                           cat:"Workbox",       w:2,    h:2.67  },
+  // Christie Lites — Other
+  { name:"CL MAC ONE CART",                      cat:"Other",         w:21,   h:2.66  },
+  // Other vendors (no CL/4W/PRG/CT prefix)
+  { name:"RANDO 12\" TRUSS CART",                cat:"Truss",         w:8,    h:2     },
+  { name:"VOLUX PHYSOS SMALL",                   cat:"Fixtures",      w:2.24, h:2.25  },
+  { name:"VOLUX PHYSOS LARGE",                   cat:"Fixtures",      w:3.5,  h:2.17  },
 ].map(x => ({ ...x, ...catColor(x.cat) }));
 
 // ── Date formatter ────────────────────────────────────────────────────────────
