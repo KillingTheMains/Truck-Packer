@@ -1769,7 +1769,7 @@ function App() {
     if (!currentEventId) return;
     const load = async () => {
       try {
-        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap, libSnap, eventSnap] = await Promise.all([
+        const [layoutsSnap, metaSnap, statusSnap, logsSnap, casesSnap, libSnap, eventSnap, showSnap] = await Promise.all([
           evtCol('layouts').get(),
           evtCol('meta').get(),
           evtCol('status').get(),
@@ -1777,7 +1777,13 @@ function App() {
           evtCol('cases').get(),
           db.collection('config').doc('library').get(),
           evtCol('config').doc('event').get(),
+          db.collection('events').doc(currentEventId).get(),
         ]);
+
+        // Show display name comes from the show doc (events/{slug}.name).
+        // Used to label PDFs and the truck-list topbar — overrides any
+        // stale globally-saved showName from a previous session.
+        const showDisplayName = (showSnap.exists && showSnap.data()?.name) || currentEventId;
 
         // ── Clear stale state from previous show before populating ───────
         setTrucks({});
@@ -1787,6 +1793,8 @@ function App() {
         setTruckMeta({});
         setActivityLog([]);
         setEventName('');
+        setShowName(showDisplayName);
+        lsSet('truckPacker_showName', showDisplayName);
 
         // ── Truck layouts ────────────────────────────────────────────────
         if (!layoutsSnap.empty) {
@@ -1803,34 +1811,10 @@ function App() {
           });
           setTrucks(base);
         } else {
-          if (!eventSnap.exists) {
-            // True first run (no event doc) — migrate layout from localStorage
-            console.log('[FS] layouts empty + no event doc — migrating from localStorage');
-            try {
-              const savedTrucks = lsGet('truckPacker_trucks');
-              if (savedTrucks) {
-                const parsed = JSON.parse(savedTrucks);
-                const base = initTrucks();
-                Object.keys(base).forEach(id => { if (!parsed[id]) parsed[id] = base[id]; });
-                Object.keys(parsed).forEach(id => { if (!parsed[id].scans) parsed[id].scans = []; });
-                setTrucks(parsed);
-                // Seed Firestore layouts async (only non-empty trucks)
-                setTimeout(() => {
-                  Object.entries(parsed).forEach(([id, t]) => {
-                    if (Object.keys(t.placed || {}).length === 0) return;
-                    evtCol('layouts').doc(id).set({
-                      placed: t.placed || {}, counter: t.counter || 1,
-                      scans: (t.scans || []).slice(-50), info: t.info || emptyTruckInfo(id),
-                      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-                    }).catch(e => console.warn('[FS] seed layout failed:', id, e.message));
-                  });
-                }, 2000);
-              }
-            } catch(e) { console.warn('[FS] localStorage layout migration failed:', e); }
-          } else {
-            // New empty show — start fresh, no localStorage fallback
-            console.log('[FS] layouts empty — new show, starting fresh');
-          }
+          // Empty show — start fresh. No legacy localStorage migration:
+          // the SAP-only migration has already run, and pulling localStorage
+          // trucks into a new show contaminates it with the old fleet.
+          console.log('[FS] layouts empty — starting fresh');
         }
 
         // ── Truck status + notes ─────────────────────────────────────────
@@ -1920,9 +1904,10 @@ function App() {
           if (d.startAt != null) setLoadCountOffset(d.startAt);
           console.log('[FS] event:', d.name, '—', (d.startAt||0)+Object.values(d.loadCounts||{}).reduce((a,b)=>a+b,0), 'total loads');
         } else {
-          // First run — seed default event
-          console.log('[FS] no event doc — seeding Load Out');
-          evtCol('config').doc('event').set({ name: 'Load Out', startedAt: Date.now(), loadCounts: {} })
+          // First run — seed event with the show's display name
+          console.log('[FS] no event doc — seeding', showDisplayName);
+          setEventName(showDisplayName);
+          evtCol('config').doc('event').set({ name: showDisplayName, startedAt: Date.now(), loadCounts: {}, startAt: 0 })
             .catch(e => console.warn('[FS] event seed failed:', e.message));
         }
 
@@ -3130,6 +3115,22 @@ function App() {
       .catch(e => console.warn('[FS] add trailer meta failed:', id, e.message));
     setTlAddOpen(false);
     setTlAddId('');
+  };
+
+  const addTruck = () => {
+    const raw = window.prompt('New truck ID (e.g. T1, AMS1, FAV5):');
+    if (raw === null) return;
+    const id = raw.trim().toUpperCase();
+    if (!id) return;
+    if (trucks[id]) { alert(`Truck "${id}" already exists.`); return; }
+    const newTruck = { placed:{}, info:emptyTruckInfo(id), history:[], counter:1, scans:[] };
+    setTrucks(prev => ({...prev, [id]: newTruck}));
+    setCurId(id); lsSet('truckPacker_curId', id);
+    evtCol('layouts').doc(id).set({
+      placed: {}, counter: 1, scans: [], info: emptyTruckInfo(id),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    }).catch(e => alert(`Failed to add truck: ${e.message}`));
+    addHistoryEntry('ADD', id, '', `${id} added to fleet`);
   };
 
   const deleteTrailer = (tid) => {
@@ -5561,6 +5562,10 @@ function App() {
                         🔄 <strong>{totalLoads}</strong> total loads
                       </span>
                   }
+                  <button onClick={addTruck}
+                    style={{fontSize:10,padding:'2px 9px',background:'rgba(129,199,132,.12)',border:'1px solid rgba(129,199,132,.4)',borderRadius:4,color:'#81c784',cursor:'pointer',whiteSpace:'nowrap',fontWeight:'bold'}}>
+                    ＋ Add Truck
+                  </button>
                   <button onClick={()=>{setNewEventNameInput('');setNewEventModal(true);}}
                     style={{fontSize:10,padding:'2px 9px',background:'rgba(144,196,255,.1)',border:'1px solid rgba(144,196,255,.3)',borderRadius:4,color:'#90cfff',cursor:'pointer',whiteSpace:'nowrap'}}>
                     ＋ New Event
@@ -5572,9 +5577,11 @@ function App() {
           <div className="tl-body">
             {filteredRows.length===0
               ? <div className="tl-empty">
-                  {truckListRows.every(r=>r.every(v=>!v))
+                  {!appLoaded
                     ? <>Loading truck data from Firestore…</>
-                    : 'No trucks match the current filter.'}
+                    : sortedTruckIds.length===0
+                      ? <>No trucks yet in this show. Add one with the <strong>+ Add Truck</strong> button above.</>
+                      : 'No trucks match the current filter.'}
                 </div>
               : (
                 <table className="tl-table">
