@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Truck Packer — SAP Sapphire 2026</title>
+<title>Truck Packer</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -1710,6 +1710,8 @@ function App() {
   const apCanvasAreaRef = useRef(null);
   const apInputRef = useRef(null);
   useEffect(()=>{ if(view==='autopick'&&apInputRef.current) apInputRef.current.focus(); },[view]);
+  // Keep the browser tab title in sync with the currently-open show.
+  useEffect(()=>{ document.title = eventName ? `Truck Packer — ${eventName}` : 'Truck Packer'; }, [eventName]);
   useEffect(()=>{ const t=setInterval(()=>setNowTick(Date.now()),1000); return()=>clearInterval(t); },[]);
   useEffect(()=>{ try{ lsSet('truckPacker_view', view); }catch(e){} }, [view]);
   useEffect(()=>{ try{ lsSet('truckPacker_tlFilter', JSON.stringify([...tlFilter])); }catch(e){} }, [tlFilter]);
@@ -6672,7 +6674,7 @@ function App() {
         <div style={{flex:1,overflowY:'auto',padding:'20px 24px',background:'#020810',color:'#cdd9e8',fontFamily:"'Courier New',Courier,monospace"}}>
           {/* Header bar */}
           <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:22,borderBottom:'1px solid #0a1a2a',paddingBottom:12}}>
-            <span style={{fontSize:12,fontWeight:'bold',letterSpacing:'.18em',color:'#7ab0d8'}}>SAP SAPPHIRE 2026</span>
+            <span style={{fontSize:12,fontWeight:'bold',letterSpacing:'.18em',color:'#7ab0d8'}}>{(eventName||showName||'').toUpperCase()}</span>
             <span style={{color:'#1a3a5a'}}>·</span>
             <span style={{fontSize:11,color:'#3a6080',letterSpacing:'.1em'}}>{sortedTruckIds.length} TRUCKS IN FLEET</span>
             <div style={{marginLeft:'auto',fontSize:10,color:'#2a4060'}}>{new Date().toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
